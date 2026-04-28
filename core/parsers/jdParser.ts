@@ -56,8 +56,6 @@ const mergeUrls = (...urlGroups: Array<string[] | undefined>): string[] =>
 const normalizeUrlList = (urls: string[] | undefined): string[] =>
   collectJdImageUrlsFromText((urls || []).join('\n'));
 
-const MAIN_IMAGE_URL_PATTERN = /\/n[01]\/jfs\//i;
-
 const JD_SECURITY_RISK_PATTERNS = [
   /账号存在安全风险/,
   /暂无法在京东网页端使用/,
@@ -76,7 +74,33 @@ const assertNoJdSecurityRisk = async (page: import('playwright').Page): Promise<
   }
 };
 
-export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot): ProductAssets => {
+/**
+ * Fetch detail HTML from JD description API.
+ */
+const fetchJdDescription = async (skuId: string, page: import('playwright').Page): Promise<string> => {
+  try {
+    const result = await page.evaluate(async (id: string) => {
+      const url = `https://api.m.jd.com/description/channel?appid=item-v3&functionId=pc_description_channel&skuId=${id}&mainSkuId=${id}&charset=utf-8&cdn=2`;
+      const response = await fetch(url, { credentials: 'include' });
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        if (json.data) {
+          if (typeof json.data === 'string') return json.data;
+          if (typeof json.data.html === 'string') return json.data.html;
+          if (typeof json.data.content === 'string') return json.data.content;
+          if (typeof json.data.data?.html === 'string') return json.data.data.html;
+        }
+      } catch { /* not JSON, return raw text */ }
+      return text;
+    }, skuId);
+    return result || '';
+  } catch {
+    return '';
+  }
+};
+
+export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot, descriptionHtml?: string): ProductAssets => {
   const skuId = extractJdSkuId(snapshot.sourceUrl);
 
   if (!skuId) {
@@ -91,10 +115,14 @@ export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot): ProductAsse
     html,
     /<div[^>]+id=["']spec-list["'][\s\S]*?(?:<\/div>\s*){1,6}/i,
   );
-  const detailHtml = collectSectionHtml(
+  const detailHtmlFromDom = collectSectionHtml(
     html,
     /<div[^>]+id=["']J-detail-content["'][\s\S]*?(?:<\/div>\s*){1,12}/i,
   );
+  // Prefer API-fetched detail HTML over DOM (new JD SPA pages)
+  const detailHtml = descriptionHtml && descriptionHtml.length > detailHtmlFromDom.length
+    ? descriptionHtml
+    : detailHtmlFromDom;
   const skuHtml = collectSectionHtml(
     html,
     /<div[^>]+id=["']choose-attrs["'][\s\S]*?(?:<\/div>\s*){1,12}/i,
@@ -111,15 +139,21 @@ export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot): ProductAsse
   const fallbackUrls = collectJdImageUrlsFromText(`${html}\n${networkText}`).filter(
     (url) => !knownUrls.has(url),
   );
-  const fallbackMainUrls = fallbackUrls.filter((url) => MAIN_IMAGE_URL_PATTERN.test(url)).slice(0, 10);
-  const unknownUrls = fallbackUrls.filter((url) => !MAIN_IMAGE_URL_PATTERN.test(url));
+  const fallbackMainUrls = fallbackUrls.filter((url) => /\/pcpubliccms\//i.test(url)).slice(0, 10);
+  const unknownUrls = fallbackUrls.filter((url) => !/\/pcpubliccms\//i.test(url));
 
   const rawMain = mergeUrls(mainUrls, fallbackMainUrls);
   const cappedMain = rawMain.length > 15 ? rawMain.slice(0, 15) : rawMain;
 
+  const rawDetail = detailUrls;
+  const fallbackDetailUrls = collectJdImageUrlsFromText(detailHtml).filter(
+    (url) => !rawDetail.includes(url) && /\/(?:n\d+|sku|imgzone)\/jfs\//i.test(url),
+  ).slice(0, 100);
+  const cappedDetail = mergeUrls(rawDetail, fallbackDetailUrls).slice(0, 200);
+
   const images = {
     main: uniqueAssetItems(createAssetItems(cappedMain, 'main', sourceUrl, 'dom')),
-    detail: uniqueAssetItems(createAssetItems(detailUrls, 'detail', sourceUrl, 'dom')),
+    detail: uniqueAssetItems(createAssetItems(cappedDetail, 'detail', sourceUrl, 'dom')),
     sku: uniqueAssetItems(createAssetItems(skuUrls, 'sku', sourceUrl, 'dom')),
     unknown: uniqueAssetItems(createAssetItems(unknownUrls, 'unknown', sourceUrl, 'script')),
   };
@@ -193,17 +227,24 @@ const collectImageUrlsFromPage = async (
       ]),
       detail: collectFromSelectors([
         '#J-detail-content img',
+        '#J-detail-content div',
+        '#J-detail-content [style*="background-image"]',
         '#detail img',
+        '#detail [style*="background-image"]',
         '#detail-main img',
         '#detail-top img',
         '#detail-footer img',
         '#related-layout-head img',
         '#related-layout-footer img',
         '.detail-content img',
+        '.detail-content [style*="background-image"]',
         '.graphicContent img',
+        '.graphicContent [style*="background-image"]',
         '.ssd-module-wrap img',
         '.ssd-module img',
         '.ssd-module',
+        '.detail-content-img',
+        '[class*="detail_img"]',
       ]),
       sku: collectFromSelectors([
         '#choose-attrs img',
@@ -357,13 +398,20 @@ export const parseJdProductAssets = async (
     await page.waitForTimeout(800);
     const sectionImageUrls = await collectImageUrlsFromPage(page);
 
-    return parseJdAssetsFromSnapshot({
-      sourceUrl,
-      html: await page.content(),
-      pageTitle: await page.title(),
-      networkTexts,
-      sectionImageUrls,
-    });
+    // Fetch detail content from JD API for SPA pages
+    const skuId = extractJdSkuId(sourceUrl);
+    const descriptionHtml = skuId ? await fetchJdDescription(skuId, page) : undefined;
+
+    return parseJdAssetsFromSnapshot(
+      {
+        sourceUrl,
+        html: await page.content(),
+        pageTitle: await page.title(),
+        networkTexts,
+        sectionImageUrls,
+      },
+      descriptionHtml,
+    );
   } finally {
     await browser.close();
   }

@@ -1,7 +1,7 @@
 import type { AssetType, ProductAssets } from '../parsers/types.js';
 import type { ProductDownloadResult } from '../downloader/types.js';
 import { resolvePlatformLink } from '../platforms/registry.js';
-import type { AssetCounts, DownloadPolicy, TaskProcessor } from './types.js';
+import type { AssetCounts, DownloadPolicy, ParsedImageUrls, TaskProcessor } from './types.js';
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
 const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
@@ -27,6 +27,12 @@ export interface ProductTaskProcessorOptions {
   parseProductAssets: ProductParser;
   downloadProductAssets: ProductDownloader;
 }
+
+const buildParsedImageUrls = (product: ProductAssets): ParsedImageUrls => ({
+  main: product.images.main.map((item) => item.url),
+  detail: product.images.detail.map((item) => item.url),
+  sku: product.images.sku.map((item) => item.url),
+});
 
 const buildAssetCounts = (
   product: ProductAssets,
@@ -83,6 +89,7 @@ export const createProductTaskProcessor = ({
         downloadPolicy,
         mode: 'parseOnly',
         assetCounts,
+        parsedImageUrls: buildParsedImageUrls(product),
         progress: {
           total,
           success: total,
@@ -117,6 +124,7 @@ export const createProductTaskProcessor = ({
       selectedTypes,
       downloadPolicy,
       assetCounts,
+      parsedImageUrls: buildParsedImageUrls(product),
       progress: {
         total,
         success: 0,

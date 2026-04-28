@@ -29,6 +29,19 @@ const hasCompletedTasks = computed(() => tasks.value.some((task) => task.status 
 const selectedTask = computed(
   () => tasks.value.find((task) => task.id === selectedTaskId.value) || tasks.value[0],
 );
+const parsedImageLog = computed(() => {
+  const task = selectedTask.value;
+  if (!task?.parsedImageUrls) {
+    return null;
+  }
+  const { main, detail } = task.parsedImageUrls;
+  const lines: string[] = [];
+  lines.push(`轮播图 (${main.length} 张):`);
+  main.forEach((url, i) => lines.push(`  ${i + 1}. ${url}`));
+  lines.push(`详情图 (${detail.length} 张):`);
+  detail.forEach((url, i) => lines.push(`  ${i + 1}. ${url}`));
+  return lines.join('\n');
+});
 const taskSummary = computed(() => ({
   total: tasks.value.length,
   running: tasks.value.filter((task) => task.status === 'parsing' || task.status === 'downloading')
@@ -538,6 +551,7 @@ onUnmounted(() => {
       <div>
         <h2>日志</h2>
         <p class="log-line">{{ message }}</p>
+        <pre v-if="parsedImageLog" class="log-image-urls">{{ parsedImageLog }}</pre>
       </div>
     </section>
   </main>

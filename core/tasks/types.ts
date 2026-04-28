@@ -31,6 +31,12 @@ export interface AssetCounts {
 
 export type TaskMode = 'download' | 'parseOnly';
 
+export interface ParsedImageUrls {
+  main: string[];
+  detail: string[];
+  sku: string[];
+}
+
 export interface DownloadTask {
   id: string;
   platform?: string;
@@ -41,6 +47,7 @@ export interface DownloadTask {
   downloadPolicy?: DownloadPolicy;
   mode?: TaskMode;
   assetCounts?: AssetCounts;
+  parsedImageUrls?: ParsedImageUrls;
   status: TaskStatus;
   progress: TaskProgress;
   errorMessage?: string;
@@ -59,6 +66,7 @@ export type TaskPatch = Partial<
     | 'downloadPolicy'
     | 'mode'
     | 'assetCounts'
+    | 'parsedImageUrls'
     | 'status'
     | 'progress'
     | 'errorMessage'

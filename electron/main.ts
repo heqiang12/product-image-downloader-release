@@ -15,7 +15,7 @@ import type { DownloadPolicy, DownloadTask, TaskMode } from '../core/tasks/types
 import type { PlatformCookie } from '../core/platforms/types';
 import type { AssetType } from '../core/parsers/types';
 import { parseJdAssetsFromSnapshot } from '../core/parsers/jdParser';
-import { normalizeJdProductUrl } from '../core/parsers/jdUrl';
+import { extractJdSkuId, normalizeJdProductUrl } from '../core/parsers/jdUrl';
 
 let outputRoot = '';
 let taskQueue: TaskQueue;
@@ -182,6 +182,13 @@ const getPlatformCookies = async (platformId: string) => {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const withTimeout = <T>(promise: Promise<T>, ms: number, errorMessage = '操作超时'): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(errorMessage)), ms)),
+  ]);
+};
+
 const executeInPage = <T>(window: BrowserWindow, code: string): Promise<T> =>
   window.webContents.executeJavaScript(code, true) as Promise<T>;
 
@@ -204,7 +211,9 @@ const autoScrollElectronPage = async (window: BrowserWindow) => {
     `new Promise((resolve) => {
       let lastHeight = 0;
       let stableTicks = 0;
+      let maxTicks = 40;
       const timer = window.setInterval(() => {
+        maxTicks--;
         window.scrollBy(0, Math.max(600, Math.floor(window.innerHeight * 0.8)));
         const currentHeight = document.body.scrollHeight;
 
@@ -215,7 +224,7 @@ const autoScrollElectronPage = async (window: BrowserWindow) => {
           lastHeight = currentHeight;
         }
 
-        if (window.scrollY + window.innerHeight >= currentHeight - 8 && stableTicks >= 2) {
+        if ((window.scrollY + window.innerHeight >= currentHeight - 8 && stableTicks >= 2) || maxTicks <= 0) {
           window.clearInterval(timer);
           resolve();
         }
@@ -298,17 +307,24 @@ const collectJdSectionImageUrlsInElectron = async (window: BrowserWindow) =>
         ]),
         detail: collectFromSelectors([
           '#J-detail-content img',
+          '#J-detail-content div',
+          '#J-detail-content [style*="background-image"]',
           '#detail img',
+          '#detail [style*="background-image"]',
           '#detail-main img',
           '#detail-top img',
           '#detail-footer img',
           '#related-layout-head img',
           '#related-layout-footer img',
           '.detail-content img',
+          '.detail-content [style*="background-image"]',
           '.graphicContent img',
+          '.graphicContent [style*="background-image"]',
           '.ssd-module-wrap img',
           '.ssd-module img',
           '.ssd-module',
+          '.detail-content-img',
+          '[class*="detail_img"]',
         ]),
         sku: collectFromSelectors([
           '#choose-attrs img',
@@ -320,6 +336,31 @@ const collectJdSectionImageUrlsInElectron = async (window: BrowserWindow) =>
       };
     })()`,
   );
+
+const fetchJdDescriptionInElectron = async (window: BrowserWindow, skuId: string) => {
+  return executeInPage<string>(
+    window,
+    `(async () => {
+      try {
+        const url = 'https://api.m.jd.com/description/channel?appid=item-v3&functionId=pc_description_channel&skuId=${skuId}&mainSkuId=${skuId}&charset=utf-8&cdn=2';
+        const response = await fetch(url, { credentials: 'include' });
+        const text = await response.text();
+        try {
+          const json = JSON.parse(text);
+          if (json.data) {
+            if (typeof json.data === 'string') return json.data;
+            if (typeof json.data.html === 'string') return json.data.html;
+            if (typeof json.data.content === 'string') return json.data.content;
+            if (typeof json.data.data && typeof json.data.data.html === 'string') return json.data.data.html;
+          }
+        } catch (e) { /* not JSON */ }
+        return text;
+      } catch (e) {
+        return '';
+      }
+    })()`
+  ).catch(() => '');
+};
 
 const parseJdProductAssetsWithElectronSession = async (
   sourceUrl: string,
@@ -338,7 +379,7 @@ const parseJdProductAssetsWithElectronSession = async (
   });
 
   try {
-    await parseWindow.loadURL(normalizedUrl);
+    await withTimeout(parseWindow.loadURL(normalizedUrl), 30_000, '页面加载超时');
     await wait(2_000);
     await assertNoJdSecurityRiskInElectron(parseWindow);
     await autoScrollElectronPage(parseWindow);
@@ -352,13 +393,15 @@ const parseJdProductAssetsWithElectronSession = async (
       executeInPage<string>(parseWindow, 'document.documentElement.outerHTML'),
       executeInPage<string>(parseWindow, 'document.title'),
     ]);
+    const skuId = extractJdSkuId(normalizedUrl);
+    const descriptionHtml = skuId ? await fetchJdDescriptionInElectron(parseWindow, skuId) : undefined;
 
     return parseJdAssetsFromSnapshot({
       sourceUrl: normalizedUrl,
       html,
       pageTitle,
       sectionImageUrls,
-    });
+    }, descriptionHtml);
   } finally {
     parseWindow.destroy();
   }

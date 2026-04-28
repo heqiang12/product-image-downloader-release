@@ -16,6 +16,12 @@ export interface DownloadPolicy {
   requestDelayMs: number;
 }
 
+export interface ParsedImageUrls {
+  main: string[];
+  detail: string[];
+  sku: string[];
+}
+
 export interface AssetCounts {
   main: number;
   detail: number;
@@ -37,6 +43,7 @@ export interface DownloadTask {
   downloadPolicy?: DownloadPolicy;
   mode?: TaskMode;
   assetCounts?: AssetCounts;
+  parsedImageUrls?: ParsedImageUrls;
   status: TaskStatus;
   progress: {
     total: number;
