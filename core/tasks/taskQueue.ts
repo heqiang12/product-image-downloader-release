@@ -1,4 +1,4 @@
-import { resolvePlatformLink } from '../platforms/registry.js';
+import { platformAdapters } from '../platforms/registry.js';
 import type { AssetType } from '../parsers/types.js';
 import type {
   DownloadPolicy,
@@ -36,27 +36,36 @@ export class TaskQueue {
   }
 
   addTasks(
+    platformId: string,
     sourceUrls: string[],
     selectedTypes?: AssetType[],
     downloadPolicy?: DownloadPolicy,
     mode: TaskMode = 'download',
   ): DownloadTask[] {
+    const platformAdapter = platformAdapters.find((p) => p.id === platformId);
+    if (!platformAdapter) return [];
+
     const now = Date.now();
     const existingUrls = new Set(Array.from(this.tasks.values()).map((task) => task.sourceUrl));
     const tasks: DownloadTask[] = [];
 
     for (const sourceUrl of sourceUrls) {
-      const resolvedLink = resolvePlatformLink(sourceUrl);
+      if (!platformAdapter.matchUrl(sourceUrl)) {
+        continue;
+      }
 
-      if (!resolvedLink || existingUrls.has(resolvedLink.normalizedUrl)) {
+      const normalizedUrl = platformAdapter.normalizeUrl(sourceUrl);
+      const skuId = platformAdapter.parseSkuId(normalizedUrl);
+
+      if (existingUrls.has(normalizedUrl)) {
         continue;
       }
 
       const task: DownloadTask = {
         id: createTaskId(),
-        platform: resolvedLink.platform.id,
-        sourceUrl: resolvedLink.normalizedUrl,
-        skuId: resolvedLink.skuId || undefined,
+        platform: platformAdapter.id,
+        sourceUrl: normalizedUrl,
+        skuId: skuId || undefined,
         selectedTypes: selectedTypes?.length ? [...selectedTypes] : undefined,
         downloadPolicy: downloadPolicy ? { ...downloadPolicy } : undefined,
         mode,
@@ -71,7 +80,7 @@ export class TaskQueue {
       };
 
       this.tasks.set(task.id, task);
-      existingUrls.add(resolvedLink.normalizedUrl);
+      existingUrls.add(normalizedUrl);
       tasks.push(task);
     }
 

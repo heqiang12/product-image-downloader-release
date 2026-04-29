@@ -94,6 +94,7 @@ declare global {
         errorMessage?: string;
       }>;
       importExcelLinks: (
+        platformId: string,
         selectedTypes?: AssetType[],
         downloadPolicy?: DownloadPolicy,
         mode?: TaskMode,
@@ -103,11 +104,12 @@ declare global {
         canceled: boolean;
         filePath?: string;
       }>;
-      validateLinks: (rawInput: string) => Promise<{
+      validateLinks: (platformId: string, rawInput: string) => Promise<{
         total: number;
         validLinks: string[];
       }>;
       addLinks: (
+        platformId: string,
         rawInput: string,
         selectedTypes?: AssetType[],
         downloadPolicy?: DownloadPolicy,

@@ -74,13 +74,8 @@ const normalizeTaskMode = (value: unknown): TaskMode =>
 const extractLinkCandidates = (rawInput: string): string[] => {
   const candidates = new Set<string>();
   const urlMatches = rawInput.match(/https?:\/\/[^\s]+/gi) || [];
-  const jdUrlMatches = rawInput.match(/(?:https?:\/\/)?(?:item\.)?(?:m\.)?jd\.com\/[^\s]+/gi) || [];
 
   for (const url of urlMatches) {
-    candidates.add(url.trim());
-  }
-
-  for (const url of jdUrlMatches) {
     candidates.add(url.trim());
   }
 
@@ -93,12 +88,7 @@ const extractLinkCandidates = (rawInput: string): string[] => {
   }
 
   const compactInput = rawInput.replace(/\s+/g, '');
-  const compactUrlCount = (compactInput.match(/https?:\/\//gi) || []).length;
-
-  if (
-    (compactUrlCount === 1 && compactInput.startsWith('http')) ||
-    /^(?:item\.)?(?:m\.)?jd\.com\//i.test(compactInput)
-  ) {
+  if (compactInput.startsWith('http')) {
     candidates.add(compactInput);
   }
 
@@ -416,25 +406,26 @@ const createTaskQueue = (initialTasks: DownloadTask[]) =>
     },
     processor: createProductTaskProcessor({
       getOutputRoot,
-      parseProductAssets: async (sourceUrl) => {
-        const resolvedLink = resolvePlatformLink(sourceUrl);
+      parseProductAssets: async (task) => {
+        const platformId = task.platform;
+        if (!platformId) throw new Error('任务缺少 platformId');
+        
+        const platform = platformAdapters.find((p) => p.id === platformId);
+        if (!platform) throw new Error(`不支持或未知的平台: ${platformId}`);
 
-        if (!resolvedLink) {
-          throw new Error(`不支持的商品链接: ${sourceUrl}`);
+        switch (platformId) {
+          case 'jd':
+            return parseJdProductAssetsWithElectronSession(
+              task.sourceUrl,
+              authProfileManager.getPartition(platformId),
+            );
+          default:
+            return platform.parseProductAssets({
+              sourceUrl: task.sourceUrl,
+              profilePartition: authProfileManager.getPartition(platformId),
+              cookies: await getPlatformCookies(platformId),
+            });
         }
-
-        if (resolvedLink.platform.id === 'jd') {
-          return parseJdProductAssetsWithElectronSession(
-            resolvedLink.normalizedUrl,
-            authProfileManager.getPartition(resolvedLink.platform.id),
-          );
-        }
-
-        return resolvedLink.platform.parseProductAssets({
-          sourceUrl: resolvedLink.normalizedUrl,
-          profilePartition: authProfileManager.getPartition(resolvedLink.platform.id),
-          cookies: await getPlatformCookies(resolvedLink.platform.id),
-        });
       },
       downloadProductAssets: (product, options) =>
         downloadProductAssets(product, {
@@ -551,12 +542,13 @@ ipcMain.handle('auth:clear', async (_event, platformId: string) => {
   };
 });
 
-ipcMain.handle('task:validate-links', (_event, rawInput: string) => {
+ipcMain.handle('task:validate-links', (_event, platformId: string, rawInput: string) => {
+  const platform = platformAdapters.find((p) => p.id === platformId);
   const links = extractLinkCandidates(rawInput);
 
   return {
     total: links.length,
-    validLinks: links.filter((link) => isSupportedProductUrl(link)),
+    validLinks: platform ? links.filter((link) => platform.matchUrl(link)) : [],
   };
 });
 
@@ -564,14 +556,19 @@ ipcMain.handle(
   'task:add-links',
   (
     _event,
+    platformId: string,
     rawInput: string,
     selectedTypesInput?: unknown,
     downloadPolicyInput?: unknown,
     modeInput?: unknown,
   ) => {
-  const links = extractLinkCandidates(rawInput).filter((item) => isSupportedProductUrl(item));
+  const platform = platformAdapters.find((p) => p.id === platformId);
+  if (!platform) throw new Error(`Platform ${platformId} not found`);
+
+  const links = extractLinkCandidates(rawInput).filter((item) => platform.matchUrl(item));
 
   return taskQueue.addTasks(
+    platformId,
     links,
     normalizeSelectedTypes(selectedTypesInput),
     normalizeDownloadPolicy(downloadPolicyInput),
@@ -584,6 +581,7 @@ ipcMain.handle(
   'import:excel-links',
   async (
     _event,
+    platformId: string,
     selectedTypesInput?: unknown,
     downloadPolicyInput?: unknown,
     modeInput?: unknown,
@@ -609,8 +607,9 @@ ipcMain.handle(
     };
   }
 
-  const importResult = await importExcelLinksFromFile(result.filePaths[0]);
+  const importResult = await importExcelLinksFromFile(result.filePaths[0], platformId);
   const addedTasks = taskQueue.addTasks(
+    platformId,
     importResult.validLinks.map((item) => item.url),
     normalizeSelectedTypes(selectedTypesInput),
     normalizeDownloadPolicy(downloadPolicyInput),

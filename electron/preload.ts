@@ -9,16 +9,16 @@ contextBridge.exposeInMainWorld('jdDownloader', {
   refreshPlatformAuth: (platformId: string) =>
     ipcRenderer.invoke('auth:refresh-status', platformId),
   clearPlatformAuth: (platformId: string) => ipcRenderer.invoke('auth:clear', platformId),
-  importExcelLinks: (selectedTypes?: string[], downloadPolicy?: unknown, mode?: string) =>
-    ipcRenderer.invoke('import:excel-links', selectedTypes, downloadPolicy, mode),
+  importExcelLinks: (platformId: string, selectedTypes?: string[], downloadPolicy?: unknown, mode?: string) =>
+    ipcRenderer.invoke('import:excel-links', platformId, selectedTypes, downloadPolicy, mode),
   exportExcelTemplate: () => ipcRenderer.invoke('import:export-template'),
-  validateLinks: (rawInput: string) =>
-    ipcRenderer.invoke('task:validate-links', rawInput) as Promise<{
+  validateLinks: (platformId: string, rawInput: string) =>
+    ipcRenderer.invoke('task:validate-links', platformId, rawInput) as Promise<{
       total: number;
       validLinks: string[];
     }>,
-  addLinks: (rawInput: string, selectedTypes?: string[], downloadPolicy?: unknown, mode?: string) =>
-    ipcRenderer.invoke('task:add-links', rawInput, selectedTypes, downloadPolicy, mode),
+  addLinks: (platformId: string, rawInput: string, selectedTypes?: string[], downloadPolicy?: unknown, mode?: string) =>
+    ipcRenderer.invoke('task:add-links', platformId, rawInput, selectedTypes, downloadPolicy, mode),
   listTasks: () => ipcRenderer.invoke('task:list'),
   startTasks: () => ipcRenderer.invoke('task:start'),
   retryFailed: () => ipcRenderer.invoke('task:retry-failed'),

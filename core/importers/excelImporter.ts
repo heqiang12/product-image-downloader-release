@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import XLSX from 'xlsx';
-import { resolvePlatformLink } from '../platforms/registry.js';
+import { platformAdapters } from '../platforms/registry.js';
 import type { ExcelImportResult, ImportedLink } from './types.js';
 
 const HEADER_ALIASES = {
@@ -25,7 +25,7 @@ const findValue = (row: Record<string, unknown>, aliases: string[]): string => {
   return '';
 };
 
-export const parseExcelLinks = (buffer: Buffer): ExcelImportResult => {
+export const parseExcelLinks = (buffer: Buffer, platformId: string): ExcelImportResult => {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const firstSheetName = workbook.SheetNames[0];
 
@@ -55,28 +55,30 @@ export const parseExcelLinks = (buffer: Buffer): ExcelImportResult => {
       return;
     }
 
-    const resolvedLink = resolvePlatformLink(url);
+    const platformAdapter = platformAdapters.find((p) => p.id === platformId);
 
-    if (!resolvedLink) {
+    if (!platformAdapter || !platformAdapter.matchUrl(url)) {
       invalidRows.push({ rowNumber, reason: '不支持或无法识别的商品链接' });
       return;
     }
 
-    if (platform && platform !== resolvedLink.platform.id && platform !== resolvedLink.platform.name) {
-      invalidRows.push({ rowNumber, reason: '平台字段与链接不匹配' });
+    if (platform && platform !== platformAdapter.id && platform !== platformAdapter.name) {
+      invalidRows.push({ rowNumber, reason: '平台字段与选择的平台不匹配' });
       return;
     }
 
-    if (seenUrls.has(resolvedLink.normalizedUrl)) {
+    const normalizedUrl = platformAdapter.normalizeUrl(url);
+
+    if (seenUrls.has(normalizedUrl)) {
       invalidRows.push({ rowNumber, reason: '重复链接' });
       return;
     }
 
-    seenUrls.add(resolvedLink.normalizedUrl);
+    seenUrls.add(normalizedUrl);
     validLinks.push({
       name: name || undefined,
-      url: resolvedLink.normalizedUrl,
-      platform: resolvedLink.platform.id,
+      url: normalizedUrl,
+      platform: platformAdapter.id,
     });
   });
 
@@ -87,8 +89,8 @@ export const parseExcelLinks = (buffer: Buffer): ExcelImportResult => {
   };
 };
 
-export const importExcelLinksFromFile = async (filePath: string): Promise<ExcelImportResult> =>
-  parseExcelLinks(await readFile(filePath));
+export const importExcelLinksFromFile = async (filePath: string, platformId: string): Promise<ExcelImportResult> =>
+  parseExcelLinks(await readFile(filePath), platformId);
 
 export const createExcelTemplateBuffer = (): Buffer => {
   const workbook = XLSX.utils.book_new();

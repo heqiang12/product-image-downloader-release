@@ -1,7 +1,7 @@
 import type { AssetType, ProductAssets } from '../parsers/types.js';
 import type { ProductDownloadResult } from '../downloader/types.js';
-import { resolvePlatformLink } from '../platforms/registry.js';
-import type { AssetCounts, DownloadPolicy, ParsedImageUrls, TaskProcessor } from './types.js';
+import { platformAdapters } from '../platforms/registry.js';
+import type { AssetCounts, DownloadPolicy, DownloadTask, ParsedImageUrls, TaskProcessor } from './types.js';
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
 const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
@@ -10,7 +10,7 @@ const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
   requestDelayMs: 800,
 };
 
-export type ProductParser = (sourceUrl: string) => Promise<ProductAssets>;
+export type ProductParser = (task: DownloadTask) => Promise<ProductAssets>;
 
 export type ProductDownloader = (
   product: ProductAssets,
@@ -56,16 +56,17 @@ export const createProductTaskProcessor = ({
   downloadProductAssets,
 }: ProductTaskProcessorOptions): TaskProcessor => {
   return async (task, update) => {
-    const resolvedLink = resolvePlatformLink(task.sourceUrl);
+    const platformId = task.platform;
+    const platformAdapter = platformAdapters.find((p) => p.id === platformId);
 
-    if (!resolvedLink) {
-      throw new Error(`不支持的商品链接: ${task.sourceUrl}`);
+    if (!platformAdapter) {
+      throw new Error(`不支持或未知的平台: ${platformId}`);
     }
 
     update({
       status: 'parsing',
-      platform: resolvedLink.platform.id,
-      skuId: resolvedLink.skuId || task.skuId,
+      platform: task.platform,
+      skuId: task.skuId,
       progress: {
         total: 0,
         success: 0,
@@ -73,7 +74,11 @@ export const createProductTaskProcessor = ({
       },
     });
 
-    const product = await parseProductAssets(resolvedLink.normalizedUrl);
+    if (!task.title) {
+      update({ title: '解析中...' });
+    }
+
+    const product = await parseProductAssets(task);
     const selectedTypes =
       task.selectedTypes?.length ? task.selectedTypes : DEFAULT_SELECTED_TYPES;
     const downloadPolicy = task.downloadPolicy || DEFAULT_DOWNLOAD_POLICY;

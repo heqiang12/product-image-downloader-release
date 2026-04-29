@@ -15,6 +15,7 @@ const outputRoot = ref('');
 const message = ref('等待导入或粘贴商品链接。');
 const tasks = ref<DownloadTask[]>([]);
 const platforms = ref<PlatformAuthStatus[]>([]);
+const selectedPlatformId = ref('jd');
 const selectedTaskId = ref('');
 const selectedAssetTypes = ref<AssetType[]>(['main', 'detail']);
 const safeMode = ref(true);
@@ -166,14 +167,15 @@ const refreshPlatforms = async () => {
 
 const addTasks = async (mode: TaskMode = 'download') => {
   try {
-    const result = await window.jdDownloader.validateLinks(rawLinks.value);
+    const result = await window.jdDownloader.validateLinks(selectedPlatformId.value, rawLinks.value);
 
     if (result.validLinks.length === 0) {
-      message.value = `未添加任务：共 ${result.total} 行，没有识别到有效京东商品链接。`;
+      message.value = `未添加任务：共 ${result.total} 行，没有识别到有效商品链接。`;
       return;
     }
 
     const addedTasks = await window.jdDownloader.addLinks(
+      selectedPlatformId.value,
       rawLinks.value,
       [...selectedAssetTypes.value],
       { ...currentDownloadPolicy.value },
@@ -264,6 +266,7 @@ const clearPlatformAuth = async (platform: PlatformAuthStatus) => {
 
 const importExcelLinks = async () => {
   const result = await window.jdDownloader.importExcelLinks(
+    selectedPlatformId.value,
     [...selectedAssetTypes.value],
     { ...currentDownloadPolicy.value },
     'download',
@@ -354,6 +357,12 @@ onUnmounted(() => {
                 模板
               </button>
             </div>
+          </div>
+          <div class="platform-selector" style="margin-bottom: 12px; display: flex; gap: 12px;">
+            <label v-for="platform in platforms" :key="platform.platform" style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+              <input type="radio" :value="platform.platform" v-model="selectedPlatformId" />
+              {{ platform.name }}
+            </label>
           </div>
           <textarea
             id="link-input"
