@@ -14,6 +14,7 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "pack": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
+    "release:win": "npm run build && electron-builder --win nsis --publish always",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.core.json --noEmit",
     "accept:stage1": "node scripts/accept-stage1.mjs",
     "accept:stage2": "tsx scripts/accept-stage2.ts",
