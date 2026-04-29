@@ -49,7 +49,7 @@ const main = async () => {
   const queue = new TaskQueue({
     processor: async () => undefined,
   });
-  const added = queue.addTasks([
+  const added = queue.addTasks('jd', [
     'https://item.m.jd.com/product/100012043978.html?scene=1',
     'https://example.com/100012043978.html',
   ]);

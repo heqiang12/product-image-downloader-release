@@ -170,6 +170,9 @@ const getTaskStatusText = (task: DownloadTask) =>
 const getTaskStatusClass = (task: DownloadTask) =>
   isTaskPausedByQueue(task) ? 'status-paused' : statusClass[task.status];
 
+const canRemoveTask = (task: DownloadTask) =>
+  task.status !== 'parsing' && task.status !== 'downloading';
+
 const formatAssetCounts = (task?: DownloadTask) => {
   if (!task?.assetCounts) {
     return '-';
@@ -249,8 +252,9 @@ const pauseTasks = async () => {
 };
 
 const retryFailed = async () => {
+  pauseRequested.value = false;
   tasks.value = await window.jdDownloader.retryFailed();
-  message.value = '失败任务已重新排队。';
+  message.value = '失败任务已重新排队并开始处理。';
 };
 
 const clearCompleted = async () => {
@@ -266,6 +270,11 @@ const clearFailed = async () => {
 };
 
 const removeTask = async (task: DownloadTask) => {
+  if (!canRemoveTask(task)) {
+    message.value = '任务正在执行，暂不能删除。可以先暂停队列，等待当前任务完成后再删除。';
+    return;
+  }
+
   tasks.value = await window.jdDownloader.removeTask(task.id);
   selectedTaskId.value = tasks.value[0]?.id || '';
   message.value = `已删除任务：${task.title || task.skuId || task.sourceUrl}`;
@@ -575,7 +584,12 @@ onUnmounted(() => {
                   </small>
                 </td>
                 <td class="row-actions">
-                  <button type="button" class="danger-button" @click.stop="removeTask(task)">
+                  <button
+                    type="button"
+                    class="danger-button"
+                    :disabled="!canRemoveTask(task)"
+                    @click.stop="removeTask(task)"
+                  >
                     删除
                   </button>
                   <button

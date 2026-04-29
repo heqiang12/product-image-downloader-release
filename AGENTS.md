@@ -1,7 +1,7 @@
-# AGENTS.md — jd-image-downloader
+# AGENTS.md — product-image-downloader
 
 ## 项目定位
-京东商品图片批量下载桌面工具。Electron 外壳 + Vue 3 渲染界面 + 核心逻辑在 `core/` 目录（平台无关，双端复用）。
+商品图片批量下载桌面助手，当前支持京东。Electron 外壳 + Vue 3 渲染界面 + 核心逻辑在 `core/` 目录（平台无关，双端复用）。
 
 ## 开发者命令
 
@@ -53,7 +53,7 @@ scripts/              → 验收脚本，仅被 accept:* 命令调用
 1. **Playwright Chromium**：`npm run install:browsers` 首次必做。缺失时任务失败报 `Executable doesn't exist`。
 2. **京东安全风控**：检测到"账号存在安全风险"页面时解析器会停止任务，不做验证码绕过。页面提供"安全模式"开关（图片并发 2，请求间隔 800ms）。
 3. **解析入口**：京东解析使用 Electron 同登录分区的隐藏窗口（共享 Cookie/localStorage/IndexedDB），Playwright 仅作备用。
-4. **默认输出路径**：`~/Downloads/jd-image-downloader`。
+4. **默认输出路径**：`~/Downloads/product-image-downloader`。
 5. **状态持久化**：`app-data/app-state.json`，保存任务队列 + 登录状态摘要。重启后自动恢复。
 
 ## 核心数据结构

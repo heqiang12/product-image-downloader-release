@@ -59,8 +59,8 @@ const main = async () => {
   const patches: TaskPatch[] = [];
   const processor = createProductTaskProcessor({
     getOutputRoot: () => 'D:\\downloads\\jd-test',
-    parseProductAssets: async (sourceUrl) => {
-      assert(sourceUrl === 'https://item.jd.com/100012043978.html', '解析器收到的链接错误');
+    parseProductAssets: async (task) => {
+      assert(task.sourceUrl === 'https://item.jd.com/100012043978.html', '解析器收到的链接错误');
       return createMockProduct();
     },
     downloadProductAssets: async (product, options) => {
@@ -84,6 +84,7 @@ const main = async () => {
   });
   const task: DownloadTask = {
     id: 'task-stage-45',
+    platform: 'jd',
     sourceUrl: 'https://item.jd.com/100012043978.html',
     status: 'pending',
     progress: {

@@ -106,8 +106,11 @@ export class TaskQueue {
   }
 
   retryFailed(): DownloadTask[] {
+    let retriedCount = 0;
+
     for (const task of this.tasks.values()) {
       if (task.status === 'failed') {
+        retriedCount += 1;
         this.patchTask(task.id, {
           status: 'pending',
           errorMessage: undefined,
@@ -118,6 +121,10 @@ export class TaskQueue {
           },
         });
       }
+    }
+
+    if (retriedCount > 0) {
+      this.isStarted = true;
     }
 
     this.pump();
@@ -148,6 +155,12 @@ export class TaskQueue {
   }
 
   removeTask(id: string): DownloadTask[] {
+    const task = this.tasks.get(id);
+
+    if (!task || task.status === 'parsing' || task.status === 'downloading') {
+      return this.listTasks();
+    }
+
     this.tasks.delete(id);
     this.emitChange();
     return this.listTasks();

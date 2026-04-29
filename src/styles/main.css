@@ -457,6 +457,8 @@ input[type="checkbox"]:hover, input[type="radio"]:hover {
 
 .table-wrap {
   overflow-x: auto;
+  min-height: 174px;
+  padding-bottom: 88px;
   margin-top: 16px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);

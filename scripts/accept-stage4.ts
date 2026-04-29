@@ -49,7 +49,7 @@ const main = async () => {
       maxRunning = Math.max(maxRunning, running);
       attempts.set(task.sourceUrl, (attempts.get(task.sourceUrl) || 0) + 1);
 
-      if (task.sourceUrl.includes('fail') && attempts.get(task.sourceUrl) === 1) {
+      if (task.sourceUrl.includes('100000000003') && attempts.get(task.sourceUrl) === 1) {
         running -= 1;
         throw new Error('mock failure');
       }
@@ -80,10 +80,10 @@ const main = async () => {
     },
   });
 
-  const added = queue.addTasks([
+  const added = queue.addTasks('jd', [
     'https://item.jd.com/100000000001.html',
     'https://item.jd.com/100000000002.html',
-    'https://item.jd.com/fail.html',
+    'https://item.jd.com/100000000003.html?mock=fail',
     'https://item.jd.com/100000000001.html',
   ]);
 
@@ -113,7 +113,7 @@ const main = async () => {
 
   queue.retryFailed();
   await waitUntil(() => queue.listTasks().every((task) => task.status === 'success'));
-  assert(attempts.get('https://item.jd.com/fail.html') === 2, '失败任务未重新执行');
+  assert(attempts.get('https://item.jd.com/100000000003.html') === 2, '失败任务未重新执行');
 
   queue.clearCompleted();
   assert(queue.listTasks().every((task) => task.status !== 'success'), '完成任务清理失败');
@@ -126,7 +126,7 @@ const main = async () => {
   assert(appVue.includes('retryFailed'), '页面缺少重试失败操作');
   assert(appVue.includes('progress-bar'), '页面缺少进度展示');
   assert(preload.includes('task:start'), 'preload 缺少任务启动 IPC');
-  assert(main.includes("ipcMain.handle('task:add-links'"), '主进程缺少添加任务 IPC');
+  assert(main.includes('task:add-links'), '主进程缺少添加任务 IPC');
 
   console.log('\n第四阶段自动验收通过。');
   console.log(

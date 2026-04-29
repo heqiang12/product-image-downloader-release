@@ -26,6 +26,7 @@ const run = (command: string, args: string[]) => {
 
 const createTask = (id: string, status: DownloadTask['status']): DownloadTask => ({
   id,
+  platform: 'jd',
   sourceUrl: `https://item.jd.com/${id}.html`,
   skuId: id,
   title: `商品_${id}`,
@@ -99,7 +100,7 @@ const main = async () => {
     assert(restoredRunningTask.status === 'pending', '运行中任务恢复后应重新排队');
     assert(restoredRunningTask.progress.total === 0, '运行中任务恢复后进度应重置');
 
-    queue.addTasks(['https://item.jd.com/100000000004.html']);
+    queue.addTasks('jd', ['https://item.jd.com/100000000004.html']);
     assert(changedTasks.length === 4, '任务变更回调未触发');
 
     await store.save({
