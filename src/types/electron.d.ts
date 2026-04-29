@@ -81,6 +81,15 @@ declare global {
   interface Window {
     jdDownloader: {
       getAppVersion: () => Promise<string>;
+      checkUpdates: () => Promise<{
+        ok: boolean;
+        skipped?: boolean;
+        message?: string;
+      }>;
+      onUpdateDownloadProgress: (
+        callback: (progress: { percent: number; transferred: number; total: number }) => void,
+      ) => () => void;
+      onUpdateError: (callback: (message: string) => void) => () => void;
       getOutputRoot: () => Promise<string>;
       selectOutputRoot: () => Promise<string>;
       listPlatforms: () => Promise<PlatformAuthStatus[]>;

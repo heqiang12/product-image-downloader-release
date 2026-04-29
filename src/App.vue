@@ -24,6 +24,8 @@ const customImageConcurrency = ref(5);
 const customRequestDelayMs = ref(0);
 const pauseRequested = ref(false);
 let refreshTimer: number | undefined;
+let disposeUpdateProgress: (() => void) | undefined;
+let disposeUpdateError: (() => void) | undefined;
 
 const canAddTasks = computed(() => rawLinks.value.trim().length > 0);
 const hasTasks = computed(() => tasks.value.length > 0);
@@ -181,6 +183,14 @@ const formatAssetCounts = (task?: DownloadTask) => {
   return `轮播 ${task.assetCounts.main} / 详情 ${task.assetCounts.detail} / SKU ${task.assetCounts.sku} / 未分类 ${task.assetCounts.unknown}`;
 };
 
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
 const refreshTasks = async () => {
   tasks.value = await window.jdDownloader.listTasks();
 
@@ -334,6 +344,12 @@ const exportExcelTemplate = async () => {
 };
 
 onMounted(async () => {
+  disposeUpdateProgress = window.jdDownloader.onUpdateDownloadProgress((progress) => {
+    message.value = `正在下载更新：${progress.percent}%（${formatBytes(progress.transferred)} / ${formatBytes(progress.total)}）`;
+  });
+  disposeUpdateError = window.jdDownloader.onUpdateError((errorMessage) => {
+    message.value = `更新检查失败：${errorMessage}`;
+  });
   appVersion.value = await window.jdDownloader.getAppVersion();
   outputRoot.value = await window.jdDownloader.getOutputRoot();
   await refreshPlatforms();
@@ -345,6 +361,8 @@ onUnmounted(() => {
   if (refreshTimer) {
     window.clearInterval(refreshTimer);
   }
+  disposeUpdateProgress?.();
+  disposeUpdateError?.();
 });
 </script>
 

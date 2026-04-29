@@ -125,8 +125,8 @@ def main():
     else:
         # 默认示例参数
         params = {
-            "cookie_string": "3AB9D23F7A4B3CSS=jdd03JCLRI65Y4L7QK4U6HPEUZBUMISLRQV7H4XJZGYOKOWXM2UP7OCVH2RZJ33JGYFVX5ZY4ZSJ3CWK3GZ7WJTK2JPRQRAAAAAM5N7LGJZAAAAAACM2PI6Q2OFRWAAX",
-            "url": "https://item.jd.com/10059605122652.html"
+            "cookie_string": "",
+            "url": "https://item.jd.com/10000000000000.html"
         }
 
     with sync_playwright() as playwright:

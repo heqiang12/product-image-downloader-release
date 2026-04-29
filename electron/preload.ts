@@ -2,6 +2,23 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('jdDownloader', {
   getAppVersion: () => ipcRenderer.invoke('app:get-version') as Promise<string>,
+  checkUpdates: () => ipcRenderer.invoke('app:check-updates'),
+  onUpdateDownloadProgress: (
+    callback: (progress: { percent: number; transferred: number; total: number }) => void,
+  ) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: { percent: number; transferred: number; total: number }) => {
+      callback(progress);
+    };
+    ipcRenderer.on('update:download-progress', listener);
+    return () => ipcRenderer.removeListener('update:download-progress', listener);
+  },
+  onUpdateError: (callback: (message: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, message: string) => {
+      callback(message);
+    };
+    ipcRenderer.on('update:error', listener);
+    return () => ipcRenderer.removeListener('update:error', listener);
+  },
   getOutputRoot: () => ipcRenderer.invoke('settings:get-output-root') as Promise<string>,
   selectOutputRoot: () => ipcRenderer.invoke('settings:select-output-root') as Promise<string>,
   listPlatforms: () => ipcRenderer.invoke('auth:list-platforms'),

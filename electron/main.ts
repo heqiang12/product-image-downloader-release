@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import path from 'node:path';
 import { TaskQueue } from '../core/tasks/taskQueue';
 import {
@@ -24,6 +25,7 @@ let authProfileManager: AuthProfileManager;
 let mainWindow: BrowserWindow | null = null;
 let queueNotificationActive = false;
 let lastPauseNotificationAt = 0;
+let updateCheckStarted = false;
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
 const VALID_ASSET_TYPES = new Set<AssetType>(['main', 'detail', 'sku', 'unknown']);
@@ -162,6 +164,11 @@ const showSystemNotification = (title: string, body: string) => {
   notification.show();
 };
 
+const showAppMessageBox = (options: Electron.MessageBoxOptions) =>
+  mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options);
+
 const handleQueueChangeForNotifications = (tasks: DownloadTask[]) => {
   if (!queueNotificationActive) {
     return;
@@ -199,6 +206,85 @@ const showPauseNotification = (tasks: DownloadTask[]) => {
     counts.running > 0 ? `${counts.running} 个正在执行的任务会完成当前步骤后停止` : '当前没有正在执行的任务';
 
   showSystemNotification('队列已暂停', `${pendingText}，${runningText}。`);
+};
+
+const setupAutoUpdater = () => {
+  if (updateCheckStarted || !app.isPackaged) {
+    return;
+  }
+
+  updateCheckStarted = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  autoUpdater.on('update-available', (info) => {
+    void showAppMessageBox({
+      type: 'info',
+      title: '发现新版本',
+      message: `发现新版本 ${info.version}`,
+      detail: '是否现在下载更新？下载完成后可以立即安装并重启应用。',
+      buttons: ['下载更新', '稍后再说'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+      .then(({ response }) => {
+        if (response === 0) {
+          void autoUpdater.downloadUpdate();
+        }
+      });
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update:download-progress', {
+      percent: Math.round(progress.percent),
+      transferred: progress.transferred,
+      total: progress.total,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    void showAppMessageBox({
+      type: 'info',
+      title: '更新已下载',
+      message: `新版本 ${info.version} 已下载完成`,
+      detail: '是否立即安装？应用会自动关闭并启动安装程序。',
+      buttons: ['立即安装', '稍后安装'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+      .then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall(false, true);
+        }
+      });
+  });
+
+  autoUpdater.on('error', (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    mainWindow?.webContents.send('update:error', message);
+  });
+};
+
+const checkForUpdates = async () => {
+  if (!app.isPackaged) {
+    return {
+      ok: false,
+      skipped: true,
+      message: '开发环境不检查更新。',
+    };
+  }
+
+  setupAutoUpdater();
+
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 };
 
 const refreshPlatformAuthStatus = async (platformId: string) => {
@@ -684,6 +770,8 @@ const createMainWindow = () => {
 
 ipcMain.handle('app:get-version', () => app.getVersion());
 
+ipcMain.handle('app:check-updates', () => checkForUpdates());
+
 ipcMain.handle('settings:get-output-root', () => getOutputRoot());
 
 ipcMain.handle('settings:select-output-root', async () => {
@@ -918,6 +1006,10 @@ app.whenReady().then(async () => {
   taskQueue = createTaskQueue(savedState.tasks);
 
   mainWindow = createMainWindow();
+  setupAutoUpdater();
+  setTimeout(() => {
+    void checkForUpdates();
+  }, 3_000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -27,11 +27,12 @@
     "accept:stage5.8": "tsx scripts/accept-stage5-8.ts"
   },
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.3",
     "@types/node": "^22.14.0",
+    "@vitejs/plugin-vue": "^5.2.3",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^35.1.5",
@@ -56,12 +57,20 @@
       "dist-electron/**",
       "package.json"
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "heqiang12",
+        "repo": "product-image-downloader-release",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": [
         "nsis"
       ],
       "icon": "build/icon.ico",
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "product-image-downloader-setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
