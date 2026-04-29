@@ -18,6 +18,8 @@ npm run dist:win
 
 `npm run pack` 生成未安装的目录版，适合本机快速验证。`npm run dist:win` 生成 Windows NSIS 安装包。
 
+完整发版、推送 tag、自动上传 GitHub Release 的操作见 [RELEASE.md](RELEASE.md)。
+
 ## 账号安全说明
 
 如果京东提示“账号存在安全风险，暂无法在京东网页端使用”，请先停止批量下载，并使用京东商城 APP 完成安全验证。工具只做保守限速和风险页检测，不提供验证码绕过、指纹伪装、代理池规避等对抗平台安全策略的能力。
