@@ -1,8 +1,9 @@
 {
-  "name": "jd-image-downloader",
+  "name": "product-image-downloader",
   "version": "0.1.0",
+  "productName": "商品图片下载助手",
   "private": true,
-  "description": "京东商品图片批量下载桌面工具",
+  "description": "商品图片批量下载桌面助手",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm:dev:renderer\" \"npm:dev:electron\"",

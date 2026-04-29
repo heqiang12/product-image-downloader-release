@@ -22,12 +22,14 @@ const safeMode = ref(true);
 const debugMode = ref(false);
 const customImageConcurrency = ref(5);
 const customRequestDelayMs = ref(0);
+const pauseRequested = ref(false);
 let refreshTimer: number | undefined;
 
 const canAddTasks = computed(() => rawLinks.value.trim().length > 0);
 const hasTasks = computed(() => tasks.value.length > 0);
 const hasFailedTasks = computed(() => tasks.value.some((task) => task.status === 'failed'));
 const hasCompletedTasks = computed(() => tasks.value.some((task) => task.status === 'success'));
+const pendingTaskCount = computed(() => tasks.value.filter((task) => task.status === 'pending').length);
 const selectedTask = computed(
   () => tasks.value.find((task) => task.id === selectedTaskId.value) || tasks.value[0],
 );
@@ -51,6 +53,21 @@ const taskSummary = computed(() => ({
   success: tasks.value.filter((task) => task.status === 'success').length,
   failed: tasks.value.filter((task) => task.status === 'failed').length,
 }));
+const shouldShowPauseNotice = computed(
+  () => pauseRequested.value && (pendingTaskCount.value > 0 || taskSummary.value.running > 0),
+);
+const pauseNoticeText = computed(() => {
+  const pendingText =
+    pendingTaskCount.value > 0
+      ? `${pendingTaskCount.value} 个未开始任务已暂停`
+      : '没有未开始任务需要暂停';
+  const runningText =
+    taskSummary.value.running > 0
+      ? `${taskSummary.value.running} 个正在执行的任务会完成当前步骤后停止`
+      : '当前没有正在执行的任务';
+
+  return `${pendingText}，${runningText}。`;
+});
 const currentDownloadPolicy = computed<DownloadPolicy>(() => {
   if (safeMode.value) {
     return {
@@ -145,6 +162,14 @@ const getPercent = (task: DownloadTask) => {
   return Math.round(((task.progress.success + task.progress.failed) / task.progress.total) * 100);
 };
 
+const isTaskPausedByQueue = (task: DownloadTask) => pauseRequested.value && task.status === 'pending';
+
+const getTaskStatusText = (task: DownloadTask) =>
+  isTaskPausedByQueue(task) ? '已暂停' : statusText[task.status];
+
+const getTaskStatusClass = (task: DownloadTask) =>
+  isTaskPausedByQueue(task) ? 'status-paused' : statusClass[task.status];
+
 const formatAssetCounts = (task?: DownloadTask) => {
   if (!task?.assetCounts) {
     return '-';
@@ -206,18 +231,21 @@ const addTasks = async (mode: TaskMode = 'download') => {
 };
 
 const startTasks = async () => {
+  pauseRequested.value = false;
   tasks.value = await window.jdDownloader.startTasks();
   message.value = '任务已开始处理。';
 };
 
 const startParseTasks = async () => {
+  pauseRequested.value = false;
   tasks.value = await window.jdDownloader.startTasks();
   message.value = '解析任务已开始处理，不会下载图片。';
 };
 
 const pauseTasks = async () => {
   tasks.value = await window.jdDownloader.pauseTasks();
-  message.value = '任务队列已暂停，正在执行的任务完成后将停止。';
+  pauseRequested.value = true;
+  message.value = `任务队列已暂停：${pauseNoticeText.value}`;
 };
 
 const retryFailed = async () => {
@@ -315,8 +343,8 @@ onUnmounted(() => {
   <main class="app-shell">
     <header class="top-bar">
       <div>
-        <p class="eyebrow">JD Image Downloader</p>
-        <h1>京东图片批量下载工具</h1>
+        <p class="eyebrow">Product Image Downloader</p>
+        <h1>商品图片下载助手</h1>
       </div>
       <div class="summary-strip">
         <span>总数 {{ taskSummary.total }}</span>
@@ -475,6 +503,18 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <div v-if="shouldShowPauseNotice" class="queue-pause-notice" role="status" aria-live="polite">
+          <div class="pause-notice-icon" aria-hidden="true">
+            <span></span>
+            <span></span>
+          </div>
+          <div>
+            <strong>队列已暂停</strong>
+            <p>{{ pauseNoticeText }}</p>
+          </div>
+          <button type="button" @click="startTasks">继续下载</button>
+        </div>
+
         <div class="table-wrap" v-if="tasks.length > 0">
           <table>
             <thead>
@@ -491,7 +531,7 @@ onUnmounted(() => {
               <tr
                 v-for="task in tasks"
                 :key="task.id"
-                :class="{ selected: task.id === selectedTask?.id }"
+                :class="{ selected: task.id === selectedTask?.id, 'queue-paused-row': isTaskPausedByQueue(task) }"
                 @click="selectedTaskId = task.id"
               >
                 <td>
@@ -516,8 +556,8 @@ onUnmounted(() => {
                 <td>{{ task.platform || '-' }}</td>
                 <td class="link-cell">{{ task.sourceUrl }}</td>
                 <td>
-                  <span class="status" :class="statusClass[task.status]">
-                    {{ statusText[task.status] }}
+                  <span class="status" :class="getTaskStatusClass(task)">
+                    {{ getTaskStatusText(task) }}
                   </span>
                   <small v-if="task.errorMessage" class="error-message">
                     {{ task.errorMessage }}

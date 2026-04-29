@@ -99,7 +99,7 @@ declare global {
         downloadPolicy?: DownloadPolicy,
         mode?: TaskMode,
       ) => Promise<ExcelImportResponse>;
-      exportExcelTemplate: () => Promise<{
+      exportExcelTemplate: (platformId: string) => Promise<{
         ok: boolean;
         canceled: boolean;
         filePath?: string;

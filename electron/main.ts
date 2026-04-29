@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } from 'electron';
 import path from 'node:path';
 import { TaskQueue } from '../core/tasks/taskQueue';
 import {
@@ -21,6 +21,9 @@ let outputRoot = '';
 let taskQueue: TaskQueue;
 let appStateStore: AppStateStore;
 let authProfileManager: AuthProfileManager;
+let mainWindow: BrowserWindow | null = null;
+let queueNotificationActive = false;
+let lastPauseNotificationAt = 0;
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
 const VALID_ASSET_TYPES = new Set<AssetType>(['main', 'detail', 'sku', 'unknown']);
@@ -29,6 +32,14 @@ const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
   imageConcurrency: 2,
   requestDelayMs: 800,
 };
+const APP_DISPLAY_NAME = '商品图片下载助手';
+const APP_USER_MODEL_ID = 'com.product-image-downloader.app';
+
+app.setName(APP_DISPLAY_NAME);
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+}
 
 const normalizeSelectedTypes = (value: unknown): AssetType[] => {
   if (!Array.isArray(value)) {
@@ -97,7 +108,7 @@ const extractLinkCandidates = (rawInput: string): string[] => {
 
 const getOutputRoot = () => {
   if (!outputRoot) {
-    outputRoot = path.join(app.getPath('downloads'), 'jd-image-downloader');
+    outputRoot = path.join(app.getPath('downloads'), 'product-image-downloader');
   }
 
   return outputRoot;
@@ -114,6 +125,80 @@ const saveAppState = async (tasks = taskQueue?.listTasks() || []) => {
     auth: authProfileManager?.toJSON() || [],
     updatedAt: Date.now(),
   });
+};
+
+const getTaskCounts = (tasks: DownloadTask[]) => ({
+  total: tasks.length,
+  pending: tasks.filter((task) => task.status === 'pending').length,
+  running: tasks.filter((task) => task.status === 'parsing' || task.status === 'downloading').length,
+  success: tasks.filter((task) => task.status === 'success').length,
+  failed: tasks.filter((task) => task.status === 'failed').length,
+});
+
+const focusMainWindow = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createMainWindow();
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.show();
+  mainWindow.focus();
+};
+
+const showSystemNotification = (title: string, body: string) => {
+  if (!Notification.isSupported()) {
+    return;
+  }
+
+  const notification = new Notification({
+    title,
+    body,
+  });
+
+  notification.on('click', focusMainWindow);
+  notification.show();
+};
+
+const handleQueueChangeForNotifications = (tasks: DownloadTask[]) => {
+  if (!queueNotificationActive) {
+    return;
+  }
+
+  const counts = getTaskCounts(tasks);
+  const queueFinished = counts.running === 0 && counts.pending === 0;
+
+  if (!queueFinished) {
+    return;
+  }
+
+  queueNotificationActive = false;
+
+  const title = counts.failed > 0 ? '下载完成，有任务失败' : '图片下载完成';
+  const body =
+    counts.failed > 0
+      ? `共 ${counts.total} 个任务，成功 ${counts.success} 个，失败 ${counts.failed} 个。`
+      : `共 ${counts.success} 个任务已完成。`;
+
+  showSystemNotification(title, body);
+};
+
+const showPauseNotification = (tasks: DownloadTask[]) => {
+  const now = Date.now();
+  if (now - lastPauseNotificationAt < 1_500) {
+    return;
+  }
+
+  lastPauseNotificationAt = now;
+  const counts = getTaskCounts(tasks);
+  const pendingText =
+    counts.pending > 0 ? `${counts.pending} 个未开始任务已暂停` : '没有未开始任务需要暂停';
+  const runningText =
+    counts.running > 0 ? `${counts.running} 个正在执行的任务会完成当前步骤后停止` : '当前没有正在执行的任务';
+
+  showSystemNotification('队列已暂停', `${pendingText}，${runningText}。`);
 };
 
 const refreshPlatformAuthStatus = async (platformId: string) => {
@@ -528,6 +613,7 @@ const createTaskQueue = (initialTasks: DownloadTask[]) =>
     initialTasks,
     onChange: (tasks) => {
       void saveAppState(tasks);
+      handleQueueChangeForNotifications(tasks);
     },
     processor: createProductTaskProcessor({
       getOutputRoot,
@@ -569,12 +655,19 @@ const createMainWindow = () => {
     height: 760,
     minWidth: 980,
     minHeight: 640,
-    title: '京东图片批量下载工具',
+    title: APP_DISPLAY_NAME,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+  mainWindow = window;
+
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
   });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -582,10 +675,11 @@ const createMainWindow = () => {
   if (devServerUrl) {
     void window.loadURL(devServerUrl);
     window.webContents.openDevTools({ mode: 'detach' });
-    return;
+    return window;
   }
 
   void window.loadFile(path.join(__dirname, '../../dist/index.html'));
+  return window;
 };
 
 ipcMain.handle('app:get-version', () => app.getVersion());
@@ -780,11 +874,21 @@ ipcMain.handle('import:export-template', async (_event, platformId: string) => {
 
 ipcMain.handle('task:list', () => taskQueue.listTasks());
 
-ipcMain.handle('task:start', () => taskQueue.start());
+ipcMain.handle('task:start', () => {
+  queueNotificationActive = true;
+  return taskQueue.start();
+});
 
-ipcMain.handle('task:pause', () => taskQueue.pause());
+ipcMain.handle('task:pause', () => {
+  const tasks = taskQueue.pause();
+  showPauseNotification(tasks);
+  return tasks;
+});
 
-ipcMain.handle('task:retry-failed', () => taskQueue.retryFailed());
+ipcMain.handle('task:retry-failed', () => {
+  queueNotificationActive = true;
+  return taskQueue.retryFailed();
+});
 
 ipcMain.handle('task:clear-completed', () => taskQueue.clearCompleted());
 
@@ -813,7 +917,7 @@ app.whenReady().then(async () => {
   authProfileManager = new AuthProfileManager(savedState.auth);
   taskQueue = createTaskQueue(savedState.tasks);
 
-  createMainWindow();
+  mainWindow = createMainWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
