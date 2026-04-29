@@ -32,9 +32,46 @@ const hasTasks = computed(() => tasks.value.length > 0);
 const hasFailedTasks = computed(() => tasks.value.some((task) => task.status === 'failed'));
 const hasCompletedTasks = computed(() => tasks.value.some((task) => task.status === 'success'));
 const pendingTaskCount = computed(() => tasks.value.filter((task) => task.status === 'pending').length);
+const failedTasks = computed(() => tasks.value.filter((task) => task.status === 'failed'));
+const selectedPlatform = computed(() =>
+  platforms.value.find((platform) => platform.platform === selectedPlatformId.value),
+);
+const isSelectedPlatformLoggedIn = computed(() => selectedPlatform.value?.isLoggedIn === true);
+const runnableTasks = computed(() =>
+  tasks.value.filter((task) => task.status === 'pending' || task.status === 'paused'),
+);
+const loginRequiredPlatforms = computed(() => {
+  const platformIds = new Set(runnableTasks.value.map((task) => task.platform).filter(Boolean));
+
+  return platforms.value.filter(
+    (platform) => platformIds.has(platform.platform) && !platform.isLoggedIn,
+  );
+});
+const failedLoginRequiredPlatforms = computed(() => {
+  const platformIds = new Set(failedTasks.value.map((task) => task.platform).filter(Boolean));
+
+  return platforms.value.filter(
+    (platform) => platformIds.has(platform.platform) && !platform.isLoggedIn,
+  );
+});
+const requiresLoginBeforeStart = computed(
+  () =>
+    loginRequiredPlatforms.value.length > 0 &&
+    tasks.value.every((task) => task.status !== 'parsing' && task.status !== 'downloading'),
+);
 const selectedTask = computed(
   () => tasks.value.find((task) => task.id === selectedTaskId.value) || tasks.value[0],
 );
+const failedSummaryText = computed(() => {
+  if (failedTasks.value.length === 0) {
+    return '';
+  }
+
+  const firstError = failedTasks.value.find((task) => task.errorMessage)?.errorMessage;
+  return firstError
+    ? `${failedTasks.value.length} 个任务失败：${firstError}`
+    : `${failedTasks.value.length} 个任务失败，请选择任务查看详情。`;
+});
 const parsedImageLog = computed(() => {
   const task = selectedTask.value;
   if (!task?.parsedImageUrls) {
@@ -89,6 +126,15 @@ const policySummary = computed(() => formatDownloadPolicy(currentDownloadPolicy.
 const pendingSettingsSummary = computed(
   () => `${selectedAssetTypeLabels(selectedAssetTypes.value)} · ${policySummary.value}`,
 );
+const loginHintText = computed(() => {
+  if (isSelectedPlatformLoggedIn.value) {
+    return '当前平台已登录，可以开始解析和下载。';
+  }
+
+  return selectedPlatform.value
+    ? `当前选择 ${selectedPlatform.value.name}，下载前建议先登录并刷新状态。`
+    : '下载前建议先完成平台登录。';
+});
 
 const statusText: Record<TaskStatus, string> = {
   pending: '待处理',
@@ -243,13 +289,45 @@ const addTasks = async (mode: TaskMode = 'download') => {
   }
 };
 
+const openLoginForSelectedPlatform = async () => {
+  if (!selectedPlatform.value) {
+    message.value = '未找到当前平台，请刷新后重试。';
+    return;
+  }
+
+  await loginPlatform(selectedPlatform.value);
+};
+
+const ensureCanStartTasks = () => {
+  if (!hasTasks.value) {
+    message.value = '任务区还没有任务，请先添加商品链接。';
+    return false;
+  }
+
+  if (requiresLoginBeforeStart.value) {
+    const names = loginRequiredPlatforms.value.map((platform) => platform.name).join('、');
+    message.value = `开始前需要先登录 ${names}：点击左侧“登录”，完成后点“刷新”，再开始下载。`;
+    return false;
+  }
+
+  return true;
+};
+
 const startTasks = async () => {
+  if (!ensureCanStartTasks()) {
+    return;
+  }
+
   pauseRequested.value = false;
   tasks.value = await window.jdDownloader.startTasks();
-  message.value = '任务已开始处理。';
+  message.value = '任务已开始处理，正在解析商品图片。';
 };
 
 const startParseTasks = async () => {
+  if (!ensureCanStartTasks()) {
+    return;
+  }
+
   pauseRequested.value = false;
   tasks.value = await window.jdDownloader.startTasks();
   message.value = '解析任务已开始处理，不会下载图片。';
@@ -262,6 +340,12 @@ const pauseTasks = async () => {
 };
 
 const retryFailed = async () => {
+  if (failedLoginRequiredPlatforms.value.length > 0) {
+    const names = failedLoginRequiredPlatforms.value.map((platform) => platform.name).join('、');
+    message.value = `重试前需要先登录 ${names}，完成后点“刷新”再重试。`;
+    return;
+  }
+
   pauseRequested.value = false;
   tasks.value = await window.jdDownloader.retryFailed();
   message.value = '失败任务已重新排队并开始处理。';
@@ -307,7 +391,10 @@ const loginPlatform = async (platform: PlatformAuthStatus) => {
 
 const refreshPlatformAuth = async (platform: PlatformAuthStatus) => {
   platforms.value = await window.jdDownloader.refreshPlatformAuth(platform.platform);
-  message.value = `${platform.name}登录状态已刷新。`;
+  const latest = platforms.value.find((item) => item.platform === platform.platform);
+  message.value = latest?.isLoggedIn
+    ? `${platform.name}登录状态已刷新：已登录，Cookie ${latest.cookieCount}。`
+    : `${platform.name}登录状态已刷新：仍未登录。`;
 };
 
 const clearPlatformAuth = async (platform: PlatformAuthStatus) => {
@@ -391,7 +478,7 @@ onUnmounted(() => {
           <div v-for="platform in platforms" :key="platform.platform" class="platform-row">
             <div>
               <strong>{{ platform.name }}</strong>
-              <small>
+              <small :class="platform.isLoggedIn ? 'auth-ok' : 'auth-missing'">
                 {{ platform.isLoggedIn ? '已登录' : '未登录' }}
                 · Cookie {{ platform.cookieCount }}
               </small>
@@ -423,6 +510,20 @@ onUnmounted(() => {
               <input type="radio" :value="platform.platform" v-model="selectedPlatformId" />
               {{ platform.name }}
             </label>
+          </div>
+          <div
+            class="login-hint"
+            :class="isSelectedPlatformLoggedIn ? 'login-hint-ok' : 'login-hint-warning'"
+          >
+            <span>{{ loginHintText }}</span>
+            <button
+              v-if="!isSelectedPlatformLoggedIn"
+              type="button"
+              class="secondary-button"
+              @click="openLoginForSelectedPlatform"
+            >
+              去登录
+            </button>
           </div>
           <textarea
             id="link-input"
@@ -528,6 +629,25 @@ onUnmounted(() => {
               清空失败
             </button>
           </div>
+        </div>
+
+        <div v-if="requiresLoginBeforeStart" class="action-notice auth-notice" role="alert">
+          <div>
+            <strong>开始下载前需要登录</strong>
+            <p>
+              待处理任务包含未登录平台：{{ loginRequiredPlatforms.map((platform) => platform.name).join('、') }}。
+              请先登录并刷新状态，避免任务直接失败。
+            </p>
+          </div>
+          <button type="button" @click="openLoginForSelectedPlatform">去登录</button>
+        </div>
+
+        <div v-if="hasFailedTasks" class="action-notice failure-notice" role="status">
+          <div>
+            <strong>有任务处理失败</strong>
+            <p>{{ failedSummaryText }}</p>
+          </div>
+          <button type="button" class="danger-button" @click="clearFailed">清空失败</button>
         </div>
 
         <div v-if="shouldShowPauseNotice" class="queue-pause-notice" role="status" aria-live="polite">

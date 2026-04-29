@@ -50,13 +50,22 @@
     "appId": "com.product-image-downloader.app",
     "productName": "商品图片下载助手",
     "asar": true,
+    "compression": "maximum",
+    "afterPack": "scripts/after-pack.mjs",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**",
       "dist-electron/**",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*.map",
+      "!node_modules/**/types/**",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/docs/**",
+      "!node_modules/**/doc/**",
+      "!node_modules/**/*.md"
     ],
     "publish": [
       {
