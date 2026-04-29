@@ -9,11 +9,14 @@ npm install
 npm run dev
 ```
 
-如果下载任务报错提示 Playwright Chromium 不存在，先执行：
+## 打包命令
 
 ```bash
-npm run install:browsers
+npm run pack
+npm run dist:win
 ```
+
+`npm run pack` 生成未安装的目录版，适合本机快速验证。`npm run dist:win` 生成 Windows NSIS 安装包。
 
 ## 账号安全说明
 

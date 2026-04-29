@@ -8,11 +8,12 @@
 | 命令 | 说明 |
 |------|------|
 | `npm run dev` | 启动开发（Vite 渲染器 + Electron 并发） |
-| `npm run install:browsers` | 安装 Playwright Chromium（首次必做） |
 | `npm run build` | 完整构建：typecheck → renderer → electron |
 | `npm run typecheck` | TypeScript 类型检查（三个 tsconfig） |
 | `npm run build:renderer` | 仅构建 Vue 渲染器 → `dist/` |
 | `npm run build:electron` | 仅编译 Electron 主进程 → `dist-electron/` |
+| `npm run pack` | 生成目录版打包产物，用于快速验证 |
+| `npm run dist:win` | 生成 Windows NSIS 安装包 |
 
 ### 验收脚本（按阶段递增）
 `accept:stage1` ~ `accept:stage5.8`，用 `tsx scripts/accept-stageN.ts` 验证构建产物和 IPC 链。
@@ -50,11 +51,10 @@ scripts/              → 验收脚本，仅被 accept:* 命令调用
 
 ## 运行环境关键点
 
-1. **Playwright Chromium**：`npm run install:browsers` 首次必做。缺失时任务失败报 `Executable doesn't exist`。
-2. **京东安全风控**：检测到"账号存在安全风险"页面时解析器会停止任务，不做验证码绕过。页面提供"安全模式"开关（图片并发 2，请求间隔 800ms）。
-3. **解析入口**：京东解析使用 Electron 同登录分区的隐藏窗口（共享 Cookie/localStorage/IndexedDB），Playwright 仅作备用。
-4. **默认输出路径**：`~/Downloads/product-image-downloader`。
-5. **状态持久化**：`app-data/app-state.json`，保存任务队列 + 登录状态摘要。重启后自动恢复。
+1. **京东安全风控**：检测到"账号存在安全风险"页面时解析器会停止任务，不做验证码绕过。页面提供"安全模式"开关（图片并发 2，请求间隔 800ms）。
+2. **解析入口**：京东解析使用 Electron 同登录分区的隐藏窗口（共享 Cookie/localStorage/IndexedDB）。Playwright 只作为开发期备用代码，不进入正式安装包浏览器二进制。
+3. **默认输出路径**：`~/Downloads/product-image-downloader`。
+4. **状态持久化**：`app-data/app-state.json`，保存任务队列 + 登录状态摘要。重启后自动恢复。
 
 ## 核心数据结构
 
