@@ -1,4 +1,4 @@
-import { collectJdImageUrlsFromText, createAssetItems, uniqueAssetItems } from './assetUrl.js';
+import { collectJdImageUrlsFromText, createAssetItems, normalizeAssetUrl, uniqueAssetItems } from './assetUrl.js';
 import { extractJdSkuId, normalizeJdProductUrl } from './jdUrl.js';
 import type {
   AssetItem,
@@ -25,8 +25,10 @@ const stripTags = (value: string): string =>
 const normalizeTitle = (title: string, skuId: string): string => {
   const cleanedTitle = title
     .replace(/【.*?】/g, '')
-    .replace(/\s*[-_]\s*京东JD\.COM.*$/i, '')
-    .replace(/\s*京东JD\.COM.*$/i, '')
+    .replace(/\[.*?\]/g, '')
+    .replace(/\s*[-_]\s*京东(?:JD\.COM)?.*$/i, '')
+    .replace(/\s*[-_]\s*京东.*$/i, '')
+    .replace(/\s*京东$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -34,6 +36,10 @@ const normalizeTitle = (title: string, skuId: string): string => {
 };
 
 export const extractJdTitleFromHtml = (html: string, skuId: string, pageTitle?: string): string => {
+  if (pageTitle && pageTitle.trim()) {
+    return normalizeTitle(pageTitle, skuId);
+  }
+
   for (const pattern of TITLE_PATTERNS) {
     const match = html.match(pattern);
 
@@ -42,7 +48,7 @@ export const extractJdTitleFromHtml = (html: string, skuId: string, pageTitle?: 
     }
   }
 
-  return normalizeTitle(pageTitle || '', skuId);
+  return `京东商品_${skuId}`;
 };
 
 const collectSectionHtml = (html: string, sectionPattern: RegExp): string => {
@@ -50,11 +56,21 @@ const collectSectionHtml = (html: string, sectionPattern: RegExp): string => {
   return match?.[0] || '';
 };
 
+const collectSectionHtmls = (html: string, sectionPatterns: RegExp[]): string =>
+  sectionPatterns.map((pattern) => collectSectionHtml(html, pattern)).filter(Boolean).join('\n');
+
 const mergeUrls = (...urlGroups: Array<string[] | undefined>): string[] =>
   Array.from(new Set(urlGroups.flatMap((items) => items || [])));
 
+// 将 DOM 直接收集的 URL 列表标准化（不走文本正则，直接对每个 URL 做规范化）
 const normalizeUrlList = (urls: string[] | undefined): string[] =>
-  collectJdImageUrlsFromText((urls || []).join('\n'));
+  Array.from(
+    new Set(
+      (urls || [])
+        .map((url) => normalizeAssetUrl(url))
+        .filter((url): url is string => Boolean(url)),
+    ),
+  );
 
 const JD_SECURITY_RISK_PATTERNS = [
   /账号存在安全风险/,
@@ -115,10 +131,11 @@ export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot, descriptionH
     html,
     /<div[^>]+id=["']spec-list["'][\s\S]*?(?:<\/div>\s*){1,6}/i,
   );
-  const detailHtmlFromDom = collectSectionHtml(
-    html,
+  const detailHtmlFromDom = collectSectionHtmls(html, [
     /<div[^>]+id=["']J-detail-content["'][\s\S]*?(?:<\/div>\s*){1,12}/i,
-  );
+    /<div[^>]+id=["']detail-main["'][\s\S]*?(?:<\/div>\s*){1,80}/i,
+    /<div[^>]+class=["'][^"']*ssd-module-wrap[^"']*["'][\s\S]*?(?:<\/div>\s*){1,80}/i,
+  ]);
   // Prefer API-fetched detail HTML over DOM (new JD SPA pages)
   const detailHtml = descriptionHtml && descriptionHtml.length > detailHtmlFromDom.length
     ? descriptionHtml
@@ -147,7 +164,7 @@ export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot, descriptionH
 
   const rawDetail = detailUrls;
   const fallbackDetailUrls = collectJdImageUrlsFromText(detailHtml).filter(
-    (url) => !rawDetail.includes(url) && /\/(?:n\d+|sku|imgzone)\/jfs\//i.test(url),
+    (url) => !rawDetail.includes(url) && /\/(?:n\d+|sku|imgzone|img|cms)\/jfs\//i.test(url),
   ).slice(0, 100);
   const cappedDetail = mergeUrls(rawDetail, fallbackDetailUrls).slice(0, 200);
 
@@ -204,7 +221,10 @@ const collectImageUrlsFromPage = async (
           add(node.getAttribute('data-url'));
           add(node.getAttribute('data-img'));
 
-          const style = node.getAttribute('style') || '';
+          const style = [
+            node.getAttribute('style') || '',
+            window.getComputedStyle(node).backgroundImage || '',
+          ].join('\n');
           const styleUrls = style.match(/url\(["']?([^"')]+)["']?\)/g) || [];
 
           styleUrls.forEach((item) =>
@@ -261,7 +281,7 @@ const openJdDetailTab = async (page: import('playwright').Page): Promise<void> =
   const waitForDetailImages = async () => {
     await page
       .waitForSelector(
-        '#J-detail-content img, #detail-main img, #detail-top img, #detail-footer img, .graphicContent img, .ssd-module-wrap img, .ssd-module img',
+        '#J-detail-content img, #detail-main img, #detail-top img, #detail-footer img, .graphicContent img, .ssd-module-wrap, .ssd-module',
         { timeout: 5_000 },
       )
       .catch(() => undefined);

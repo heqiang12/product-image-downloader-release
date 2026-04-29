@@ -62,7 +62,7 @@ assert(assets.platform === 'jd', '平台标识错误');
 assert(assets.skuId === '100012043978', '解析结果 SKU ID 错误');
 assert(assets.title === '测试京东商品', '商品标题解析错误');
 assert(summary.counts.main === 2, '主图数量解析错误');
-assert(summary.counts.detail === 2, '详情图数量解析错误');
+assert(summary.counts.detail === 3, '详情图数量解析错误');
 assert(summary.counts.sku === 2, 'SKU 图数量解析错误');
 assert(summary.counts.unknown >= 2, '脚本或网络图片兜底解析错误');
 assert(summary.counts.total >= 8, '总图片数量解析错误');

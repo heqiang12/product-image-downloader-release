@@ -1,13 +1,17 @@
 import type { AssetItem, AssetType } from './types.js';
 
-const IMAGE_HOST_PATTERN = /(^|\.)360buyimg\.com$/i;
+// 京东图片 CDN 域名：包含旧版 360buyimg.com 和新版 x-jd.com、img*.jd.com
+const IMAGE_HOST_PATTERN = /(^|\.)360buyimg\.com$|(^|\.)x-jd\.com$|(^|\.)(?:img\d+|imgzone|storage)\.jd\.com$/i;
 const IMAGE_EXT_PATTERN = /\.(avif|bmp|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
+// 同时匹配两套 CDN 主机
 const JD_IMAGE_URL_PATTERN =
-  /(?:(?:https?:)?\/\/)?(?:img\d{2}|m|imgzone|storage)\.360buyimg\.com\/[^\s"'<>\\)]+/gi;
+  /(?:(?:https?:)?\/\/)?(?:img\d{2}|m|imgzone|storage)\.360buyimg\.com\/[^\s"'<>\\)]+|(?:(?:https?:)?\/\/)?(?:img\d*)\.x-jd\.com\/[^\s"'<>\\)]+|(?:(?:https?:)?\/\/)?(?:img\d+|imgzone|storage)\.jd\.com\/[^\s"'<>\\)]+/gi;
 const NOISY_PATH_PATTERN =
   /\/(?:imagetools|babel|channel2022|assets|sprite|icons?|logo|jshop|cms|devfe|uba|da|cc|libres|retail-mall|jsresource)\/|sprite-|\.svg/i;
 const PRODUCT_IMAGE_PATH_PATTERN =
-  /\/(?:n\d+|sku|imgzone|popWareDetail|vc|jfs|img)\/|\/jfs\/|\/s\d+x\d+_/i;
+  /\/(?:n\d+|sku|imgzone|popWareDetail|vc|jfs|img)\/|\/jfs\//i;
+// 小尺寸缩略图路径（宽或高 < 200px），视为图标/角标，不采集
+const THUMBNAIL_PATH_PATTERN = /\/s(?:[1-9]\d?|1\d\d)x(?:[1-9]\d?|1\d\d)_/i;
 
 const decodeHtmlEntities = (value: string): string =>
   value
@@ -40,11 +44,19 @@ export const normalizeAssetUrl = (rawUrl: string): string | null => {
       .replace(/\/{2,}/g, '/')
       .replace(/^\/n0\/jfs\//i, '/n1/jfs/');
 
-    if (NOISY_PATH_PATTERN.test(url.pathname)) {
-      return null;
+    // 先检查是否为商品图路径（优先级最高，直接放行，不被噪声规则误杀）
+    if (PRODUCT_IMAGE_PATH_PATTERN.test(url.pathname)) {
+      // 但过滤掉宽或高 < 200px 的小尺寸缩略图（通常是角标/图标）
+      if (THUMBNAIL_PATH_PATTERN.test(url.pathname)) {
+        return null;
+      }
+      url.protocol = 'https:';
+      url.hash = '';
+      return url.toString();
     }
 
-    if (!PRODUCT_IMAGE_PATH_PATTERN.test(url.pathname)) {
+    // 再排除明确的噪声路径（图标、logo、模板等资源）
+    if (NOISY_PATH_PATTERN.test(url.pathname)) {
       return null;
     }
 

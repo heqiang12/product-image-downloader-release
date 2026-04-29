@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('jdDownloader', {
   clearPlatformAuth: (platformId: string) => ipcRenderer.invoke('auth:clear', platformId),
   importExcelLinks: (platformId: string, selectedTypes?: string[], downloadPolicy?: unknown, mode?: string) =>
     ipcRenderer.invoke('import:excel-links', platformId, selectedTypes, downloadPolicy, mode),
-  exportExcelTemplate: () => ipcRenderer.invoke('import:export-template'),
+  exportExcelTemplate: (platformId: string) => ipcRenderer.invoke('import:export-template', platformId),
   validateLinks: (platformId: string, rawInput: string) =>
     ipcRenderer.invoke('task:validate-links', platformId, rawInput) as Promise<{
       total: number;
@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('jdDownloader', {
     ipcRenderer.invoke('task:add-links', platformId, rawInput, selectedTypes, downloadPolicy, mode),
   listTasks: () => ipcRenderer.invoke('task:list'),
   startTasks: () => ipcRenderer.invoke('task:start'),
+  pauseTasks: () => ipcRenderer.invoke('task:pause'),
   retryFailed: () => ipcRenderer.invoke('task:retry-failed'),
   clearCompleted: () => ipcRenderer.invoke('task:clear-completed'),
   clearFailed: () => ipcRenderer.invoke('task:clear-failed'),

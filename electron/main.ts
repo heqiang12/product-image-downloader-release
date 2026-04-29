@@ -277,7 +277,10 @@ const collectJdSectionImageUrlsInElectron = async (window: BrowserWindow) =>
             add(node.getAttribute('data-url'));
             add(node.getAttribute('data-img'));
 
-            const style = node.getAttribute('style') || '';
+            const style = [
+              node.getAttribute('style') || '',
+              window.getComputedStyle(node).backgroundImage || '',
+            ].join('\\n');
             const styleUrls = style.match(/url\\(["']?([^"')]+)["']?\\)/g) || [];
             styleUrls.forEach((item) => add(item.replace(/^url\\(["']?/, '').replace(/["']?\\)$/, '')));
           });
@@ -287,44 +290,121 @@ const collectJdSectionImageUrlsInElectron = async (window: BrowserWindow) =>
       };
 
       return {
-        main: collectFromSelectors([
-          '#spec-list img',
-          '#preview img',
-          '#spec-n1 img',
-          '#spec-img',
-          '.image-carousel img.image',
-          '.image-carouse img.image',
-        ]),
-        detail: collectFromSelectors([
-          '#J-detail-content img',
-          '#J-detail-content div',
-          '#J-detail-content [style*="background-image"]',
-          '#detail img',
-          '#detail [style*="background-image"]',
-          '#detail-main img',
-          '#detail-top img',
-          '#detail-footer img',
-          '#related-layout-head img',
-          '#related-layout-footer img',
-          '.detail-content img',
-          '.detail-content [style*="background-image"]',
-          '.graphicContent img',
-          '.graphicContent [style*="background-image"]',
-          '.ssd-module-wrap img',
-          '.ssd-module img',
-          '.ssd-module',
-          '.detail-content-img',
-          '[class*="detail_img"]',
-        ]),
+        // ── 主图区（每种格式来源加注释，遇新格式追加） ──────────────────────────────────
+        main: (() => {
+          const mainUrls = new Set();
+          const addUrl = (value) => {
+            if (!value || typeof value !== 'string') return;
+            const u = value.trim().split(',')[0].trim().split(/\s+/)[0];
+            if (u) mainUrls.add(u);
+          };
+
+          // 策略1（格式C）：新版轮播 .image-carousel / .image-carouse
+          // 来源：HTML 分析 + jd_image_spider.py 验证
+          // 关键：跳过含 .thumbnails-play-icon 的 .item（视频封面项），对齐 Python 脚本逻辑
+          document.querySelectorAll(
+            '.image-carousel .item, .image-carouse .item'
+          ).forEach(item => {
+            if (item.querySelector('.thumbnails-play-icon')) return; // 跳过视频项
+            const img = item.querySelector('img.image');
+            if (img) addUrl(img.getAttribute('src'));
+          });
+
+          // 策略2（格式A）：经典 PC 端 #spec-list 缩略图列表
+          // 只取 img.image，避免抓到列表内的 UI 图标
+          document.querySelectorAll('#spec-list img.image').forEach(img => addUrl(img.getAttribute('src')));
+
+          // 策略3（格式A/B）：主图展示区 #spec-img（点击缩略图后更新的大图）
+          // 注意：只取 #spec-img 本身，不用 #spec-n1 img（太宽，会抓到 .arrow 等 UI 图标）
+          const specImg = document.querySelector('#spec-img');
+          if (specImg instanceof HTMLImageElement) addUrl(specImg.getAttribute('src'));
+
+          // 策略4（格式A）：#preview 预览区（仅取 img.image，排除 UI 元素）
+          document.querySelectorAll('#preview img.image').forEach(img => addUrl(img.getAttribute('src')));
+
+          // ── 新主图格式在此处追加 ──────────────────────────────────────────────────
+
+          return Array.from(mainUrls);
+        })(),
+        detail: (() => {
+          const detailUrls = new Set();
+          const addUrl = (value) => {
+            if (!value) return;
+            String(value).split(',').map(s => s.trim().split(/\\s+/)[0]).filter(Boolean).forEach(u => detailUrls.add(u));
+          };
+          const extractBg = (el) => {
+            const bg = window.getComputedStyle(el).backgroundImage || '';
+            const m = bg.match(/url\\([\"']?([^\"')]+)[\"']?\\)/);
+            return m ? m[1] : '';
+          };
+
+          // ── 详情图策略1：SSD 模块背景图（格式D：SPA 渲染，背景图模式）───────────────
+          // 来源：jd_image_spider.py 验证，适用于京东新版店铺装修/SPA 商品详情页
+          const ssdModules = document.querySelectorAll(
+            '#detail-main > div > div > div.ssd-module-wrap > div.ssd-module, ' +
+            '.ssd-module-wrap > .ssd-module'
+          );
+          ssdModules.forEach(el => addUrl(extractBg(el)));
+
+          // ── 详情图策略2：detail-main / J-detail-content 内 img（格式E）─────────────
+          // 来源：jd_image_spider.py 验证，适用于传统 POP 商家和自营详情页
+          // 注意：跳过含 .thumbnails-play-icon 的视频缩略图父容器
+          const detailImgs = document.querySelectorAll(
+            '#detail-main > div > div img, ' +
+            '#J-detail-content img, ' +
+            '#J-detail-content [style*="background-image"]'
+          );
+          detailImgs.forEach(el => {
+            if (el instanceof HTMLImageElement) {
+              // 跳过视频播放图标的容器内图片
+              if (el.closest('.thumbnails-play-icon, .video-thumb, .J-video-img')) return;
+              addUrl(el.getAttribute('src'));
+              addUrl(el.getAttribute('data-src'));
+              addUrl(el.getAttribute('data-lazy-img'));
+              addUrl(el.getAttribute('data-original'));
+            } else {
+              const bg = el.getAttribute('style') || '';
+              const m = bg.match(/url\\([\"']?([^\"')]+)[\"']?\\)/);
+              if (m) addUrl(m[1]);
+            }
+          });
+
+          // ── 详情图策略3：其他已知精确容器（格式F/G）──────────────────────────────────
+          // .graphicContent：部分店铺自定义装修使用的图文容器
+          // .detail-content：早期通用详情区 class
+          // ── 新格式在此处追加（每种新格式请加来源注释和对应的商品链接示例）────────────
+          [
+            '.graphicContent img',
+            '.detail-content img',
+            '.detail-content [style*="background-image"]',
+            '.detail-content-img',
+          ].forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+              if (el instanceof HTMLImageElement) {
+                addUrl(el.getAttribute('src'));
+                addUrl(el.getAttribute('data-src'));
+                addUrl(el.getAttribute('data-lazy-img'));
+              } else {
+                const bg = window.getComputedStyle(el).backgroundImage || '';
+                const m = bg.match(/url\\([\"']?([^\"')]+)[\"']?\\)/);
+                if (m) addUrl(m[1]);
+              }
+            });
+          });
+
+          return Array.from(detailUrls);
+        })(),
+        // ── SKU 选项图 ──────────────────────────────────────────────────────────────────
         sku: collectFromSelectors([
-          '#choose-attrs img',
-          '.choose-attrs img',
-          '.choose-attr img',
-          '.specification-item-sku-image',
-          '[id^="choose-attr"] img',
+          '#choose-attrs img',              // 格式A/B/C：SKU 选择区（颜色/尺寸图）
+          '.choose-attrs img',              // 格式变体
+          '.choose-attr img',               // 格式变体
+          '.specification-item-sku-image',  // 格式D：新版规格选择器
+          '[id^="choose-attr"] img',        // 格式E：动态生成的 SKU 选项容器
         ]),
       };
     })()`,
+
   );
 
 const fetchJdDescriptionInElectron = async (window: BrowserWindow, skuId: string) => {
@@ -335,17 +415,29 @@ const fetchJdDescriptionInElectron = async (window: BrowserWindow, skuId: string
         const url = 'https://api.m.jd.com/description/channel?appid=item-v3&functionId=pc_description_channel&skuId=${skuId}&mainSkuId=${skuId}&charset=utf-8&cdn=2';
         const response = await fetch(url, { credentials: 'include' });
         const text = await response.text();
+        console.log('[JD DESC API] status:', response.status, 'length:', text.length, 'preview:', text.slice(0, 300));
         try {
           const json = JSON.parse(text);
+          // 尝试多种已知的数据结构
           if (json.data) {
             if (typeof json.data === 'string') return json.data;
             if (typeof json.data.html === 'string') return json.data.html;
             if (typeof json.data.content === 'string') return json.data.content;
-            if (typeof json.data.data && typeof json.data.data.html === 'string') return json.data.data.html;
+            if (json.data.data && typeof json.data.data.html === 'string') return json.data.data.html;
+            if (json.data.data && typeof json.data.data === 'string') return json.data.data;
           }
-        } catch (e) { /* not JSON */ }
-        return text;
+          if (json.result) {
+            if (typeof json.result === 'string') return json.result;
+            if (typeof json.result.html === 'string') return json.result.html;
+          }
+          // 如果解析不到已知字段，打印详细结构帮助调试
+          console.log('[JD DESC API] unknown json structure, keys:', Object.keys(json).join(', '));
+        } catch { /* 不是 JSON，直接当 HTML 返回 */ }
+        // 如果 text 包含 img 标签，说明本身就是 HTML
+        if (text.includes('<img') || text.includes('url(')) return text;
+        return '';
       } catch (e) {
+        console.log('[JD DESC API] fetch error:', String(e));
         return '';
       }
     })()`
@@ -369,7 +461,19 @@ const parseJdProductAssetsWithElectronSession = async (
   });
 
   try {
-    await withTimeout(parseWindow.loadURL(normalizedUrl), 30_000, '页面加载超时');
+    try {
+      await withTimeout(parseWindow.loadURL(normalizedUrl), 30_000, '页面加载超时');
+    } catch (loadError: unknown) {
+      const msg = loadError instanceof Error ? loadError.message : String(loadError);
+      if (msg.includes('ERR_ABORTED')) {
+        if (msg.includes('risk_handler') || msg.includes('cfe.m.jd.com')) {
+          throw new Error('拦截到京东滑块验证！请点击左侧平台【登录】按钮，在弹出的窗口中浏览该商品完成验证，再重试此任务。');
+        }
+        // 对于其他的 ERR_ABORTED（通常是因为内部重定向或被追踪器拦截），可以选择忽略并尝试继续解析
+      } else {
+        throw loadError;
+      }
+    }
     await wait(2_000);
     await assertNoJdSecurityRiskInElectron(parseWindow);
     await autoScrollElectronPage(parseWindow);
@@ -379,19 +483,40 @@ const parseJdProductAssetsWithElectronSession = async (
     await assertNoJdSecurityRiskInElectron(parseWindow);
 
     const sectionImageUrls = await collectJdSectionImageUrlsInElectron(parseWindow);
+
+    // === 调试日志（主进程终端） ===
+    console.log('[DEBUG] sectionImageUrls.main count:', sectionImageUrls.main.length);
+    console.log('[DEBUG] sectionImageUrls.detail count:', sectionImageUrls.detail.length);
+    if (sectionImageUrls.detail.length > 0) {
+      console.log('[DEBUG] detail[0]:', sectionImageUrls.detail[0]);
+    } else {
+      console.log('[DEBUG] detail is EMPTY - DOM selectors did not match any detail images');
+    }
+
     const [html, pageTitle] = await Promise.all([
       executeInPage<string>(parseWindow, 'document.documentElement.outerHTML'),
       executeInPage<string>(parseWindow, 'document.title'),
     ]);
     const skuId = extractJdSkuId(normalizedUrl);
     const descriptionHtml = skuId ? await fetchJdDescriptionInElectron(parseWindow, skuId) : undefined;
+    console.log('[DEBUG] descriptionHtml length:', descriptionHtml?.length ?? 0);
+    if (descriptionHtml && descriptionHtml.length > 0) {
+      console.log('[DEBUG] descriptionHtml preview:', descriptionHtml.slice(0, 200));
+    } else {
+      console.log('[DEBUG] descriptionHtml is EMPTY - API returned nothing useful');
+    }
 
-    return parseJdAssetsFromSnapshot({
+    const result = parseJdAssetsFromSnapshot({
       sourceUrl: normalizedUrl,
       html,
       pageTitle,
       sectionImageUrls,
     }, descriptionHtml);
+    console.log('[DEBUG] parsed detail count:', result.images.detail.length, '| unknown count:', result.images.unknown.length);
+    if (result.images.unknown.length > 0) {
+      console.log('[DEBUG] unknown[0]:', result.images.unknown[0].url);
+    }
+    return result;
   } finally {
     parseWindow.destroy();
   }
@@ -626,10 +751,10 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle('import:export-template', async () => {
+ipcMain.handle('import:export-template', async (_event, platformId: string) => {
   const result = await dialog.showSaveDialog({
     title: '导出商品链接模板',
-    defaultPath: path.join(app.getPath('desktop'), '商品链接导入模板.xlsx'),
+    defaultPath: path.join(app.getPath('desktop'), `商品链接导入模板_${platformId}.xlsx`),
     filters: [
       {
         name: 'Excel 文件',
@@ -645,7 +770,7 @@ ipcMain.handle('import:export-template', async () => {
     };
   }
 
-  await writeExcelTemplate(result.filePath);
+  await writeExcelTemplate(result.filePath, platformId);
   return {
     ok: true,
     canceled: false,
@@ -656,6 +781,8 @@ ipcMain.handle('import:export-template', async () => {
 ipcMain.handle('task:list', () => taskQueue.listTasks());
 
 ipcMain.handle('task:start', () => taskQueue.start());
+
+ipcMain.handle('task:pause', () => taskQueue.pause());
 
 ipcMain.handle('task:retry-failed', () => taskQueue.retryFailed());
 

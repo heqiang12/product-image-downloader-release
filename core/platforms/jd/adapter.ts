@@ -5,7 +5,7 @@ import type { PlatformAdapter } from '../types.js';
 export const jdPlatformAdapter: PlatformAdapter = {
   id: 'jd',
   name: '京东',
-  loginUrl: 'https://passport.jd.com/new/login.aspx',
+  loginUrl: 'https://www.jd.com/',
   authCookieNames: ['pt_key', 'pt_pin'],
   authCookieGroups: [
     ['pt_key', 'pt_pin'],

@@ -99,6 +99,12 @@ export class TaskQueue {
     return this.listTasks();
   }
 
+  pause(): DownloadTask[] {
+    this.isStarted = false;
+    this.emitChange();
+    return this.listTasks();
+  }
+
   retryFailed(): DownloadTask[] {
     for (const task of this.tasks.values()) {
       if (task.status === 'failed') {
@@ -197,6 +203,9 @@ export class TaskQueue {
       const task = this.listTasks().find((item) => item.status === 'pending');
 
       if (!task) {
+        if (this.runningCount === 0) {
+          this.isStarted = false;
+        }
         return;
       }
 

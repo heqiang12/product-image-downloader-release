@@ -19,6 +19,7 @@ const selectedPlatformId = ref('jd');
 const selectedTaskId = ref('');
 const selectedAssetTypes = ref<AssetType[]>(['main', 'detail']);
 const safeMode = ref(true);
+const debugMode = ref(false);
 const customImageConcurrency = ref(5);
 const customRequestDelayMs = ref(0);
 let refreshTimer: number | undefined;
@@ -96,7 +97,6 @@ const modeText: Record<TaskMode, string> = {
 const assetTypeOptions: Array<{ value: AssetType; label: string }> = [
   { value: 'main', label: '轮播主图' },
   { value: 'detail', label: '详情图' },
-  { value: 'sku', label: 'SKU 图' },
 ];
 
 const assetTypeText: Record<AssetType, string> = {
@@ -215,6 +215,11 @@ const startParseTasks = async () => {
   message.value = '解析任务已开始处理，不会下载图片。';
 };
 
+const pauseTasks = async () => {
+  tasks.value = await window.jdDownloader.pauseTasks();
+  message.value = '任务队列已暂停，正在执行的任务完成后将停止。';
+};
+
 const retryFailed = async () => {
   tasks.value = await window.jdDownloader.retryFailed();
   message.value = '失败任务已重新排队。';
@@ -283,7 +288,7 @@ const importExcelLinks = async () => {
 };
 
 const exportExcelTemplate = async () => {
-  const result = await window.jdDownloader.exportExcelTemplate();
+  const result = await window.jdDownloader.exportExcelTemplate(selectedPlatformId.value);
   message.value = result.ok
     ? `模板已导出：${result.filePath}`
     : result.canceled
@@ -358,8 +363,8 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
-          <div class="platform-selector" style="margin-bottom: 12px; display: flex; gap: 12px;">
-            <label v-for="platform in platforms" :key="platform.platform" style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+          <div class="platform-selector">
+            <label v-for="platform in platforms" :key="platform.platform">
               <input type="radio" :value="platform.platform" v-model="selectedPlatformId" />
               {{ platform.name }}
             </label>
@@ -372,9 +377,10 @@ onUnmounted(() => {
           <p class="pending-settings">{{ pendingSettingsSummary }}</p>
           <div class="inline-actions">
             <button type="button" :disabled="!canAddTasks" @click="addTasks('download')">
-              添加下载
+              添加任务
             </button>
             <button
+              v-if="debugMode"
               type="button"
               class="secondary-button"
               :disabled="!canAddTasks"
@@ -408,6 +414,10 @@ onUnmounted(() => {
             <div class="download-policy">
               <div class="policy-heading">
                 <span>下载策略</span>
+                <label style="margin-left: auto;">
+                  <input type="checkbox" v-model="debugMode" />
+                  调试模式
+                </label>
                 <label>
                   <input type="checkbox" v-model="safeMode" />
                   安全模式
@@ -420,7 +430,8 @@ onUnmounted(() => {
                     type="number"
                     min="1"
                     max="8"
-                    v-model.number="customImageConcurrency"
+                    :value="safeMode ? 2 : customImageConcurrency"
+                    @input="customImageConcurrency = parseInt(($event.target as HTMLInputElement).value) || 1"
                     :disabled="safeMode"
                   />
                 </label>
@@ -431,7 +442,8 @@ onUnmounted(() => {
                     min="0"
                     max="5000"
                     step="100"
-                    v-model.number="customRequestDelayMs"
+                    :value="safeMode ? 800 : customRequestDelayMs"
+                    @input="customRequestDelayMs = parseInt(($event.target as HTMLInputElement).value) || 0"
                     :disabled="safeMode"
                   />
                 </label>
@@ -443,8 +455,9 @@ onUnmounted(() => {
         <div class="panel-heading">
           <h2>任务区</h2>
           <div class="toolbar">
-            <button type="button" :disabled="!hasTasks" @click="startTasks">开始下载</button>
-            <button type="button" class="secondary-button" :disabled="!hasTasks" @click="startParseTasks">
+            <button v-if="taskSummary.running === 0" type="button" :disabled="!hasTasks" @click="startTasks">开始下载</button>
+            <button v-else type="button" class="secondary-button" @click="pauseTasks">暂停队列</button>
+            <button v-if="debugMode" type="button" class="secondary-button" :disabled="!hasTasks" @click="startParseTasks">
               开始解析
             </button>
             <button type="button" :disabled="!hasFailedTasks" @click="retryFailed">重试失败</button>
@@ -482,12 +495,23 @@ onUnmounted(() => {
                 @click="selectedTaskId = task.id"
               >
                 <td>
-                  <strong>{{ task.title || '待解析商品' }}</strong>
-                  <small v-if="task.skuId">SKU: {{ task.skuId }}</small>
-                  <small>模式：{{ modeText[task.mode || 'download'] }}</small>
-                  <small>下载：{{ selectedAssetTypeLabels(task.selectedTypes) }}</small>
-                  <small>{{ formatDownloadPolicy(task.downloadPolicy) }}</small>
-                  <small v-if="task.assetCounts">解析：{{ formatAssetCounts(task) }}</small>
+                  <div class="task-title-wrap">
+                    <strong :title="task.title || '待解析商品'">{{ task.title || '待解析商品' }}</strong>
+                    <div class="info-tip">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <div class="tip-content">
+                        <small v-if="task.skuId">SKU: {{ task.skuId }}</small>
+                        <small>模式：{{ modeText[task.mode || 'download'] }}</small>
+                        <small>内容：{{ selectedAssetTypeLabels(task.selectedTypes) }}</small>
+                        <small>策略：{{ formatDownloadPolicy(task.downloadPolicy) }}</small>
+                        <small v-if="task.assetCounts">解析：{{ formatAssetCounts(task) }}</small>
+                      </div>
+                    </div>
+                  </div>
                 </td>
                 <td>{{ task.platform || '-' }}</td>
                 <td class="link-cell">{{ task.sourceUrl }}</td>

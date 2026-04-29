@@ -117,6 +117,7 @@ declare global {
       ) => Promise<DownloadTask[]>;
       listTasks: () => Promise<DownloadTask[]>;
       startTasks: () => Promise<DownloadTask[]>;
+      pauseTasks: () => Promise<DownloadTask[]>;
       retryFailed: () => Promise<DownloadTask[]>;
       clearCompleted: () => Promise<DownloadTask[]>;
       clearFailed: () => Promise<DownloadTask[]>;

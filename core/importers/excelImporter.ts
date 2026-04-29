@@ -92,23 +92,29 @@ export const parseExcelLinks = (buffer: Buffer, platformId: string): ExcelImport
 export const importExcelLinksFromFile = async (filePath: string, platformId: string): Promise<ExcelImportResult> =>
   parseExcelLinks(await readFile(filePath), platformId);
 
-export const createExcelTemplateBuffer = (): Buffer => {
+export const createExcelTemplateBuffer = (platformId: string): Buffer => {
   const workbook = XLSX.utils.book_new();
+  
+  // 根据平台生成示例链接
+  let exampleUrl = 'https://item.jd.com/100012043978.html';
+  if (platformId === 'taobao' || platformId === 'tmall') {
+    exampleUrl = 'https://detail.tmall.com/item.htm?id=xxxxxx';
+  }
+
   const sheet = XLSX.utils.json_to_sheet([
     {
-      名称: '示例商品',
-      链接: 'https://item.jd.com/100012043978.html',
-      平台: 'jd',
+      商品链接: exampleUrl,
+      说明: '此行是示例，导入前请删除并替换为真实链接',
     },
   ]);
 
-  XLSX.utils.book_append_sheet(workbook, sheet, '商品链接');
+  XLSX.utils.book_append_sheet(workbook, sheet, '商品链接导入');
   return XLSX.write(workbook, {
     type: 'buffer',
     bookType: 'xlsx',
   }) as Buffer;
 };
 
-export const writeExcelTemplate = async (filePath: string): Promise<void> => {
-  await writeFile(filePath, createExcelTemplateBuffer());
+export const writeExcelTemplate = async (filePath: string, platformId: string): Promise<void> => {
+  await writeFile(filePath, createExcelTemplateBuffer(platformId));
 };
