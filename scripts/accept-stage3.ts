@@ -137,13 +137,16 @@ const main = async () => {
     },
   };
 
-  assert(flattenSelectedAssets(product).length === 4, '下载前去重失败');
+  const selectedTypes = ['main', 'detail', 'sku', 'unknown'] as const;
+
+  assert(flattenSelectedAssets(product, [...selectedTypes]).length === 4, '下载前去重失败');
 
   const result = await downloadProductAssets(product, {
     outputRoot,
     concurrency: 2,
     retries: 1,
     timeoutMs: 5_000,
+    selectedTypes: [...selectedTypes],
   });
 
   assert(result.progress.total === 4, '下载总数错误');
@@ -151,9 +154,9 @@ const main = async () => {
   assert(result.progress.failed === 1, '失败数量错误');
   assert(server.attempts.get('/retry.jpg') === 2, '失败重试未生效');
 
-  await stat(path.join(result.outputDir, 'main', 'main_001.png'));
-  await stat(path.join(result.outputDir, 'detail', 'detail_002.png'));
-  await stat(path.join(result.outputDir, 'sku', 'sku_003.png'));
+  await stat(path.join(result.outputDir, '轮播图', 'main_001.png'));
+  await stat(path.join(result.outputDir, '详情图', 'detail_002.png'));
+  await stat(path.join(result.outputDir, '规格图', 'sku_003.png'));
   await stat(result.metaPath);
 
   const meta = JSON.parse(await readFile(result.metaPath, 'utf8')) as {

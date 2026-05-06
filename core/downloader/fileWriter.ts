@@ -8,6 +8,13 @@ import {
   getExtensionFromUrl,
 } from '../utils/filename.js';
 
+const ASSET_TYPE_DIR_NAMES: Record<AssetItem['type'], string> = {
+  main: '轮播图',
+  detail: '详情图',
+  sku: '规格图',
+  unknown: '其他图片',
+};
+
 export interface SaveAssetInput {
   asset: AssetItem;
   index: number;
@@ -28,7 +35,7 @@ export const saveAssetFile = async ({
   data,
   contentType,
 }: SaveAssetInput): Promise<SaveAssetResult> => {
-  const typeDir = path.join(outputDir, asset.type);
+  const typeDir = path.join(outputDir, ASSET_TYPE_DIR_NAMES[asset.type]);
   await ensureDir(typeDir);
 
   const extension =

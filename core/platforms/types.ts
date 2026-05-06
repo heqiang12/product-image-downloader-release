@@ -21,6 +21,7 @@ export interface PlatformAdapter {
   id: string;
   name: string;
   loginUrl?: string;
+  homeUrl?: string;
   authCookieNames?: string[];
   authCookieGroups?: string[][];
   matchUrl: (url: string) => boolean;

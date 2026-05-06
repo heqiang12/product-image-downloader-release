@@ -27,6 +27,7 @@ const normalizeTitle = (title: string, skuId: string): string => {
     .replace(/【.*?】/g, '')
     .replace(/\[.*?\]/g, '')
     .replace(/\s*[-_]\s*京东(?:JD\.COM)?.*$/i, '')
+    .replace(/\s*京东\s*JD\.COM\s*$/i, '')
     .replace(/\s*[-_]\s*京东.*$/i, '')
     .replace(/\s*京东$/i, '')
     .replace(/\s+/g, ' ')

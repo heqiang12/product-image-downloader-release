@@ -12,6 +12,7 @@ const PRODUCT_IMAGE_PATH_PATTERN =
   /\/(?:n\d+|sku|imgzone|popWareDetail|vc|jfs|img)\/|\/jfs\//i;
 // 小尺寸缩略图路径（宽或高 < 200px），视为图标/角标，不采集
 const THUMBNAIL_PATH_PATTERN = /\/s(?:[1-9]\d?|1\d\d)x(?:[1-9]\d?|1\d\d)_/i;
+const DERIVED_IMAGE_EXT_PATTERN = /\.(jpe?g|png|webp|bmp|gif)\.(?:avif|webp)$/i;
 
 const decodeHtmlEntities = (value: string): string =>
   value
@@ -42,7 +43,8 @@ export const normalizeAssetUrl = (rawUrl: string): string | null => {
 
     url.pathname = url.pathname
       .replace(/\/{2,}/g, '/')
-      .replace(/^\/n0\/jfs\//i, '/n1/jfs/');
+      .replace(/^\/n0\/jfs\//i, '/n1/jfs/')
+      .replace(DERIVED_IMAGE_EXT_PATTERN, '.$1');
 
     // 先检查是否为商品图路径（优先级最高，直接放行，不被噪声规则误杀）
     if (PRODUCT_IMAGE_PATH_PATTERN.test(url.pathname)) {
@@ -95,11 +97,13 @@ export const uniqueAssetItems = (items: AssetItem[]): AssetItem[] => {
   const seen = new Set<string>();
 
   return items.filter((item) => {
-    if (seen.has(item.url)) {
+    const key = normalizeAssetUrl(item.url) || item.url;
+
+    if (seen.has(key)) {
       return false;
     }
 
-    seen.add(item.url);
+    seen.add(key);
     return true;
   });
 };

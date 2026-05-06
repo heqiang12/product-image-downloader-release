@@ -821,7 +821,10 @@ ipcMain.handle('auth:login', async (_event, platformId: string) => {
     void refreshPlatformAuthStatus(platform.id);
   });
 
-  await loginWindow.loadURL(platform.loginUrl);
+  const status = await refreshPlatformAuthStatus(platform.id);
+  const targetUrl = status.isLoggedIn ? platform.homeUrl || platform.loginUrl : platform.loginUrl;
+
+  await loginWindow.loadURL(targetUrl);
   return {
     ok: true,
   };

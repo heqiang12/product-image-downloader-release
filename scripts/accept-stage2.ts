@@ -48,6 +48,11 @@ assert(
     'https://img10.360buyimg.com/n5/jfs/t1/main-001.jpg',
   '图片链接标准化失败',
 );
+assert(
+  normalizeAssetUrl('//img30.360buyimg.com/sku/jfs/t1/detail-001.jpg.avif') ===
+    'https://img30.360buyimg.com/sku/jfs/t1/detail-001.jpg',
+  '京东派生图片格式归一化失败',
+);
 
 const html = readFileSync(path.join(rootDir, 'tests/fixtures/jd-product.html'), 'utf8');
 const assets = parseJdAssetsFromSnapshot({
