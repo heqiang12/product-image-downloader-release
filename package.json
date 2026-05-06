@@ -1,6 +1,6 @@
 {
   "name": "product-image-downloader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "productName": "商品图片下载助手",
   "private": true,
   "description": "商品图片批量下载桌面助手",
