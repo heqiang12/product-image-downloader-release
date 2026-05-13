@@ -72,7 +72,7 @@ const main = async () => {
       return {
         product,
         outputDir: 'D:\\downloads\\jd-test\\真实闭环测试商品_100012043978',
-        metaPath: 'D:\\downloads\\jd-test\\真实闭环测试商品_100012043978\\meta.json',
+        metaPath: 'D:\\downloads\\jd-test\\真实闭环测试商品_100012043978\\商品图片清单.xlsx',
         progress: {
           total: 3,
           success: 3,

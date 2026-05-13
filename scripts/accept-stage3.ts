@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import XLSX from 'xlsx';
 import type { ProductAssets } from '../core/parsers/types.js';
 import { downloadProductAssets, flattenSelectedAssets } from '../core/downloader/downloadManager.js';
 import { buildProductFolderName, sanitizeFilenamePart } from '../core/utils/filename.js';
@@ -159,17 +160,24 @@ const main = async () => {
   await stat(path.join(result.outputDir, '规格图', 'sku_003.png'));
   await stat(result.metaPath);
 
-  const meta = JSON.parse(await readFile(result.metaPath, 'utf8')) as {
-    progress: { total: number; success: number; failed: number };
-    assets: Array<{ status: string; errorMessage?: string }>;
-  };
+  const xlsxBuffer = await stat(result.metaPath).then(() => {
+    // re-read is needed; stat already succeeded
+    return import('node:fs/promises').then(({ readFile }) => readFile(result.metaPath));
+  });
+  const workbook = XLSX.read(xlsxBuffer, { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]]);
 
-  assert(meta.progress.total === 4, 'meta.json 总数错误');
-  assert(meta.progress.success === 3, 'meta.json 成功数量错误');
-  assert(meta.progress.failed === 1, 'meta.json 失败数量错误');
+  // Row 0 is the summary row
+  const summary = rows[0];
+  assert(summary['图片总数'] === 4, '商品图片清单.xlsx 总数错误');
+  assert(summary['成功数'] === 3, '商品图片清单.xlsx 成功数量错误');
+  assert(summary['失败数'] === 1, '商品图片清单.xlsx 失败数量错误');
+
+  // Remaining rows are asset-level data
+  const assetRows = rows.slice(1);
   assert(
-    meta.assets.some((asset) => asset.status === 'failed' && asset.errorMessage?.includes('HTTP 404')),
-    'meta.json 未记录失败原因',
+    assetRows.some((row) => row['下载状态'] === '失败' && String(row['失败原因'] || '').includes('404')),
+    '商品图片清单.xlsx 未记录失败原因',
   );
 
   console.log('\n第三阶段自动验收通过。');

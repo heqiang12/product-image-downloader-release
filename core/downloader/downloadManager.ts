@@ -1,8 +1,9 @@
 import path from 'node:path';
 import type { AssetItem, AssetType, ProductAssets } from '../parsers/types.js';
-import { ensureDir, writeJsonFile } from '../utils/fs.js';
+import { ensureDir } from '../utils/fs.js';
 import { buildProductFolderName } from '../utils/filename.js';
 import { saveAssetFile } from './fileWriter.js';
+import { writeMetaExcel } from './excelMetaWriter.js';
 import type {
   DownloadedAsset,
   DownloadOptions,
@@ -183,7 +184,13 @@ export const downloadProductAssets = async (
 
   delete progress.current;
 
-  const metaPath = path.join(outputDir, 'meta.json');
+  const metaPath = await writeMetaExcel({
+    product,
+    outputDir,
+    progress,
+    assets: results,
+  });
+
   const result: ProductDownloadResult = {
     product,
     outputDir,
@@ -191,18 +198,6 @@ export const downloadProductAssets = async (
     progress,
     assets: results,
   };
-
-  await writeJsonFile(metaPath, {
-    product: {
-      platform: product.platform,
-      skuId: product.skuId,
-      title: product.title,
-      sourceUrl: product.sourceUrl,
-    },
-    progress,
-    assets: results,
-    generatedAt: new Date().toISOString(),
-  });
 
   return result;
 };
