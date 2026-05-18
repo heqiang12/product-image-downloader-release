@@ -20,9 +20,20 @@ const selectedTaskId = ref('');
 const selectedAssetTypes = ref<AssetType[]>(['main', 'detail']);
 const safeMode = ref(true);
 const debugMode = ref(false);
+const showAdvancedPolicy = ref(false); // 高级反风控设置是否展开
+// ── 图片下载参数 ──
 const customImageConcurrency = ref(5);
 const customRequestDelayMs = ref(0);
+// ── 反风控节奏参数（自定义模式专用） ──
+const customTaskCooldownMin = ref(5);
+const customTaskCooldownMax = ref(15);
+const customBrowsePauseMin = ref(15);
+const customBrowsePauseMax = ref(45);
+const customBrowseInterval = ref(10);
+const customEnablePrewarm = ref(false);
 const pauseRequested = ref(false);
+const autoPaused = ref(false);
+const autoPauseThreshold = ref(3);
 let refreshTimer: number | undefined;
 let disposeUpdateProgress: (() => void) | undefined;
 let disposeUpdateError: (() => void) | undefined;
@@ -31,6 +42,7 @@ const canAddTasks = computed(() => rawLinks.value.trim().length > 0);
 const hasTasks = computed(() => tasks.value.length > 0);
 const hasFailedTasks = computed(() => tasks.value.some((task) => task.status === 'failed'));
 const hasCompletedTasks = computed(() => tasks.value.some((task) => task.status === 'success'));
+const hasPendingTasks = computed(() => tasks.value.some((task) => task.status === 'pending'));
 const pendingTaskCount = computed(() => tasks.value.filter((task) => task.status === 'pending').length);
 const failedTasks = computed(() => tasks.value.filter((task) => task.status === 'failed'));
 const selectedPlatform = computed(() =>
@@ -113,6 +125,12 @@ const currentDownloadPolicy = computed<DownloadPolicy>(() => {
       safeMode: true,
       imageConcurrency: 2,
       requestDelayMs: 800,
+      taskCooldownMin: 20,
+      taskCooldownMax: 50,
+      browsePauseMin: 60,
+      browsePauseMax: 180,
+      browseInterval: 5,
+      enablePrewarm: true,
     };
   }
 
@@ -120,6 +138,12 @@ const currentDownloadPolicy = computed<DownloadPolicy>(() => {
     safeMode: false,
     imageConcurrency: Math.min(8, Math.max(1, Math.round(customImageConcurrency.value || 5))),
     requestDelayMs: Math.min(5_000, Math.max(0, Math.round(customRequestDelayMs.value || 0))),
+    taskCooldownMin: Math.min(300, Math.max(1, Math.round(customTaskCooldownMin.value || 5))),
+    taskCooldownMax: Math.min(600, Math.max(1, Math.round(customTaskCooldownMax.value || 15))),
+    browsePauseMin: Math.min(600, Math.max(1, Math.round(customBrowsePauseMin.value || 15))),
+    browsePauseMax: Math.min(1200, Math.max(1, Math.round(customBrowsePauseMax.value || 45))),
+    browseInterval: Math.min(100, Math.max(1, Math.round(customBrowseInterval.value || 10))),
+    enablePrewarm: customEnablePrewarm.value,
   };
 });
 const policySummary = computed(() => formatDownloadPolicy(currentDownloadPolicy.value));
@@ -172,14 +196,20 @@ const assetTypeText: Record<AssetType, string> = {
 };
 
 function formatDownloadPolicy(policy?: DownloadPolicy) {
-  const value =
-    policy || {
-      safeMode: true,
-      imageConcurrency: 2,
-      requestDelayMs: 800,
-    };
+  const value = policy || {
+    safeMode: true,
+    imageConcurrency: 2,
+    requestDelayMs: 800,
+    taskCooldownMin: 20,
+    taskCooldownMax: 50,
+    browsePauseMin: 60,
+    browsePauseMax: 180,
+    browseInterval: 5,
+    enablePrewarm: true,
+  };
 
-  return `${value.safeMode ? '安全模式' : '自定义模式'} · 并发 ${value.imageConcurrency} · 间隔 ${value.requestDelayMs}ms`;
+  const cooldown = `冷却 ${value.taskCooldownMin ?? 5}~${value.taskCooldownMax ?? 15}s`;
+  return `${value.safeMode ? '安全模式' : '自定义模式'} · 并发 ${value.imageConcurrency} · 间隔 ${value.requestDelayMs}ms · ${cooldown}`;
 }
 
 const selectedAssetTypeLabels = (types?: AssetType[]) =>
@@ -243,6 +273,10 @@ const refreshTasks = async () => {
   if (!selectedTaskId.value && tasks.value[0]) {
     selectedTaskId.value = tasks.value[0].id;
   }
+
+  const status = await window.jdDownloader.getQueueStatus();
+  autoPaused.value = status.autoPaused;
+  autoPauseThreshold.value = status.threshold;
 };
 
 const refreshPlatforms = async () => {
@@ -319,6 +353,7 @@ const startTasks = async () => {
   }
 
   pauseRequested.value = false;
+  autoPaused.value = false;
   tasks.value = await window.jdDownloader.startTasks();
   message.value = '任务已开始处理，正在解析商品图片。';
 };
@@ -342,11 +377,12 @@ const pauseTasks = async () => {
 const retryFailed = async () => {
   if (failedLoginRequiredPlatforms.value.length > 0) {
     const names = failedLoginRequiredPlatforms.value.map((platform) => platform.name).join('、');
-    message.value = `重试前需要先登录 ${names}，完成后点“刷新”再重试。`;
+    message.value = `重试前需要先登录 ${names}，完成后点”刷新”再重试。`;
     return;
   }
 
   pauseRequested.value = false;
+  autoPaused.value = false;
   tasks.value = await window.jdDownloader.retryFailed();
   message.value = '失败任务已重新排队并开始处理。';
 };
@@ -361,6 +397,12 @@ const clearFailed = async () => {
   tasks.value = await window.jdDownloader.clearFailed();
   selectedTaskId.value = tasks.value[0]?.id || '';
   message.value = '已清空失败任务。';
+};
+
+const clearPending = async () => {
+  tasks.value = await window.jdDownloader.clearPending();
+  selectedTaskId.value = tasks.value[0]?.id || '';
+  message.value = '已清空待处理任务。';
 };
 
 const removeTask = async (task: DownloadTask) => {
@@ -484,7 +526,7 @@ onUnmounted(() => {
               </small>
             </div>
             <div class="mini-actions">
-              <button type="button" @click="loginPlatform(platform)">登录</button>
+              <button type="button" @click="loginPlatform(platform)">{{ platform.isLoggedIn ? '查看' : '登录' }}</button>
               <button type="button" class="secondary-button" @click="refreshPlatformAuth(platform)">
                 刷新
               </button>
@@ -604,6 +646,65 @@ onUnmounted(() => {
                   />
                 </label>
               </div>
+              <!-- 高级反风控设置 -->
+              <div class="advanced-policy-toggle">
+                <button
+                  v-if="!safeMode"
+                  type="button"
+                  class="secondary-button toggle-btn"
+                  @click="showAdvancedPolicy = !showAdvancedPolicy"
+                >
+                  {{ showAdvancedPolicy ? '▾ 收起高级设置' : '▸ 高级反风控设置' }}
+                </button>
+                <span v-else class="safe-mode-hint">安全模式已自动配置最优反风控参数</span>
+              </div>
+              <div v-if="!safeMode && showAdvancedPolicy" class="advanced-policy-fields">
+                <div class="advanced-policy-row">
+                  <label>
+                    任务冷却最小(s)
+                    <input
+                      type="number" min="1" max="300"
+                      v-model.number="customTaskCooldownMin"
+                    />
+                  </label>
+                  <label>
+                    任务冷却最大(s)
+                    <input
+                      type="number" min="1" max="600"
+                      v-model.number="customTaskCooldownMax"
+                    />
+                  </label>
+                </div>
+                <div class="advanced-policy-row">
+                  <label>
+                    浏览休息最小(s)
+                    <input
+                      type="number" min="1" max="600"
+                      v-model.number="customBrowsePauseMin"
+                    />
+                  </label>
+                  <label>
+                    浏览休息最大(s)
+                    <input
+                      type="number" min="1" max="1200"
+                      v-model.number="customBrowsePauseMax"
+                    />
+                  </label>
+                </div>
+                <div class="advanced-policy-row">
+                  <label>
+                    每 N 个任务休息
+                    <input
+                      type="number" min="1" max="100"
+                      v-model.number="customBrowseInterval"
+                    />
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" v-model="customEnablePrewarm" />
+                    预热导航
+                  </label>
+                </div>
+              </div>
               <p>{{ policySummary }}</p>
             </div>
           </div>
@@ -628,6 +729,9 @@ onUnmounted(() => {
             >
               清空失败
             </button>
+            <button type="button" :disabled="!hasPendingTasks" @click="clearPending">
+              清空待处理
+            </button>
           </div>
         </div>
 
@@ -648,6 +752,17 @@ onUnmounted(() => {
             <p>{{ failedSummaryText }}</p>
           </div>
           <button type="button" class="danger-button" @click="clearFailed">清空失败</button>
+        </div>
+
+        <div v-if="autoPaused" class="action-notice auto-pause-notice" role="alert">
+          <div>
+            <strong>连续失败，已自动暂停</strong>
+            <p>连续 {{ autoPauseThreshold }} 个任务失败，可能是登录态失效或触发了平台风控。请检查登录状态后重试。</p>
+          </div>
+          <div class="auto-pause-actions">
+            <button type="button" @click="openLoginForSelectedPlatform">检查登录</button>
+            <button type="button" @click="retryFailed">重试失败</button>
+          </div>
         </div>
 
         <div v-if="shouldShowPauseNotice" class="queue-pause-notice" role="status" aria-live="polite">

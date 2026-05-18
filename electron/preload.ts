@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('jdDownloader', {
   retryFailed: () => ipcRenderer.invoke('task:retry-failed'),
   clearCompleted: () => ipcRenderer.invoke('task:clear-completed'),
   clearFailed: () => ipcRenderer.invoke('task:clear-failed'),
+  clearPending: () => ipcRenderer.invoke('task:clear-pending'),
+  getQueueStatus: () => ipcRenderer.invoke('task:queue-status'),
   removeTask: (taskId: string) => ipcRenderer.invoke('task:remove', taskId),
   openOutput: (taskId: string) =>
     ipcRenderer.invoke('task:open-output', taskId) as Promise<{

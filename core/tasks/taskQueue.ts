@@ -9,8 +9,23 @@ import type {
   TaskQueueOptions,
 } from './types.js';
 
+// 安全模式默认策略（用于在无法获取 Policy 时的兜底）
+const DEFAULT_POLICY: DownloadPolicy = {
+  safeMode: true,
+  imageConcurrency: 2,
+  requestDelayMs: 800,
+  taskCooldownMin: 20,
+  taskCooldownMax: 50,
+  browsePauseMin: 60,
+  browsePauseMax: 180,
+  browseInterval: 5,
+  enablePrewarm: true,
+};
+
 const createTaskId = (): string =>
   `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class TaskQueue {
   private readonly processor: TaskProcessor;
@@ -19,20 +34,52 @@ export class TaskQueue {
 
   private readonly onChange?: (tasks: DownloadTask[]) => void;
 
+  private readonly getActivePolicyFn?: () => DownloadPolicy | undefined;
+
+  private readonly onBrowseCooldown?: (browsePauseMin: number, browsePauseMax: number) => Promise<void>;
+
   private readonly tasks = new Map<string, DownloadTask>();
 
   private runningCount = 0;
 
   private isStarted = false;
 
+  private completedCount = 0;
+
+  // 下一次触发模拟浏览时的已完成任务数阈值
+  private nextBrowseAt = 0;
+
+  consecutiveFailures = 0;
+
+  autoPaused = false;
+
+  static readonly AUTO_PAUSE_THRESHOLD = 3;
+
   constructor(options: TaskQueueOptions) {
     this.processor = options.processor;
     this.concurrency = Math.max(1, options.concurrency ?? 2);
     this.onChange = options.onChange;
+    this.getActivePolicyFn = options.getActivePolicyFn;
+    this.onBrowseCooldown = options.onBrowseCooldown;
+    // 初始 nextBrowseAt 在 start() 时根据 Policy 重置
+    this.nextBrowseAt = 0;
 
     for (const task of options.initialTasks || []) {
       this.tasks.set(task.id, this.normalizeInitialTask(task));
     }
+  }
+
+  /** 获取当前活跃 Policy，无法获取时用安全模式兜底 */
+  private getPolicy(): DownloadPolicy {
+    return this.getActivePolicyFn?.() ?? DEFAULT_POLICY;
+  }
+
+  /** 计算本次浏览触发的下一个阈值 */
+  private nextBrowseThreshold(policy: DownloadPolicy): number {
+    // 在 browseInterval 上下 20% 随机抖动，避免固定节律
+    const base = policy.browseInterval;
+    const jitter = Math.floor(base * 0.2);
+    return this.completedCount + base - jitter + Math.floor(Math.random() * (jitter * 2 + 1));
   }
 
   addTasks(
@@ -94,7 +141,12 @@ export class TaskQueue {
   }
 
   start(): DownloadTask[] {
+    const policy = this.getPolicy();
     this.isStarted = true;
+    this.autoPaused = false;
+    this.consecutiveFailures = 0;
+    this.completedCount = 0;
+    this.nextBrowseAt = this.nextBrowseThreshold(policy);
     this.pump();
     return this.listTasks();
   }
@@ -124,7 +176,12 @@ export class TaskQueue {
     }
 
     if (retriedCount > 0) {
+      const policy = this.getPolicy();
       this.isStarted = true;
+      this.autoPaused = false;
+      this.consecutiveFailures = 0;
+      this.completedCount = 0;
+      this.nextBrowseAt = this.nextBrowseThreshold(policy);
     }
 
     this.pump();
@@ -146,6 +203,17 @@ export class TaskQueue {
   clearFailed(): DownloadTask[] {
     for (const task of this.tasks.values()) {
       if (task.status === 'failed') {
+        this.tasks.delete(task.id);
+      }
+    }
+
+    this.emitChange();
+    return this.listTasks();
+  }
+
+  clearPending(): DownloadTask[] {
+    for (const task of this.tasks.values()) {
+      if (task.status === 'pending') {
         this.tasks.delete(task.id);
       }
     }
@@ -236,6 +304,8 @@ export class TaskQueue {
 
         if (currentTask && currentTask.status !== 'failed') {
           this.patchTask(task.id, { status: 'success' });
+          this.consecutiveFailures = 0;
+          this.completedCount += 1;
         }
       })
       .catch((error: unknown) => {
@@ -243,10 +313,54 @@ export class TaskQueue {
           status: 'failed',
           errorMessage: error instanceof Error ? error.message : String(error),
         });
+        this.consecutiveFailures += 1;
+
+        // 连续失败达到阈值，自动暂停队列
+        if (this.consecutiveFailures >= TaskQueue.AUTO_PAUSE_THRESHOLD) {
+          this.isStarted = false;
+          this.autoPaused = true;
+        }
       })
-      .finally(() => {
+      .finally(async () => {
         this.runningCount -= 1;
-        this.pump();
+
+        const hasMorePending = this.listTasks().some((t) => t.status === 'pending');
+
+        if (hasMorePending && this.isStarted) {
+          const policy = this.getPolicy();
+
+          // 达到浏览休息阈值：触发模拟浏览/长休
+          if (
+            this.nextBrowseAt > 0 &&
+            this.onBrowseCooldown &&
+            this.completedCount >= this.nextBrowseAt
+          ) {
+            this.nextBrowseAt = this.nextBrowseThreshold(policy);
+            try {
+              await this.onBrowseCooldown(policy.browsePauseMin, policy.browsePauseMax);
+            } catch {
+              // 浏览模拟失败不影响主流程
+            }
+          } else {
+            // 渐进式冷却：随任务累积自动拉长间隔，降低被计数器命中的风险
+            // 每完成 8 个任务增加 20% 冷却时长，最高 2.5 倍
+            const progressFactor = Math.min(2.5, 1 + Math.floor(this.completedCount / 8) * 0.2);
+            const minMs = policy.taskCooldownMin * 1_000 * progressFactor;
+            const maxMs = policy.taskCooldownMax * 1_000 * progressFactor;
+            const cooldownMs = minMs + Math.random() * (maxMs - minMs);
+            console.log(
+              `[COOLDOWN] 任务间冷却 ${Math.round(cooldownMs / 1000)}s` +
+              ` (已完成第 ${this.completedCount} 个, 渐进系数 ${progressFactor.toFixed(1)}x)`,
+            );
+            await sleep(cooldownMs);
+          }
+        }
+
+        if (this.isStarted) {
+          this.pump();
+        } else {
+          this.emitChange();
+        }
       });
   }
 }

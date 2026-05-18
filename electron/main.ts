@@ -33,9 +33,18 @@ const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
   safeMode: true,
   imageConcurrency: 2,
   requestDelayMs: 800,
+  taskCooldownMin: 20,
+  taskCooldownMax: 50,
+  browsePauseMin: 60,
+  browsePauseMax: 180,
+  browseInterval: 5,
+  enablePrewarm: true,
 };
 const APP_DISPLAY_NAME = '商品图片下载助手';
 const APP_USER_MODEL_ID = 'com.product-image-downloader.app';
+
+// 反自动化检测：禁用 Chromium 的 AutomationControlled 标志
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
 app.setName(APP_DISPLAY_NAME);
 
@@ -74,10 +83,17 @@ const normalizeDownloadPolicy = (value: unknown): DownloadPolicy => {
     return { ...DEFAULT_DOWNLOAD_POLICY };
   }
 
+  // 自定义模式：每个字段独立校验，不合法时使用宽松的默认值
   return {
     safeMode: false,
     imageConcurrency: clampNumber(candidate.imageConcurrency, 1, 8, 5),
     requestDelayMs: clampNumber(candidate.requestDelayMs, 0, 5_000, 0),
+    taskCooldownMin: clampNumber(candidate.taskCooldownMin, 1, 300, 5),
+    taskCooldownMax: clampNumber(candidate.taskCooldownMax, 1, 600, 15),
+    browsePauseMin: clampNumber(candidate.browsePauseMin, 1, 600, 15),
+    browsePauseMax: clampNumber(candidate.browsePauseMax, 1, 1200, 45),
+    browseInterval: clampNumber(candidate.browseInterval, 1, 100, 10),
+    enablePrewarm: candidate.enablePrewarm === true,
   };
 };
 
@@ -341,7 +357,81 @@ const getPlatformCookies = async (platformId: string) => {
     }));
 };
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const randomWait = (minMs: number, maxMs: number) =>
+  wait(minMs + Math.random() * (maxMs - minMs));
+
+// 对数正态分布等待：大部分值在均值附近，偶尔出现较长停顿，更符合真人行为
+const logNormalWait = (meanMs: number, sigma = 0.5): Promise<void> => {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  const factor = Math.exp(sigma * z);
+  const ms = Math.max(500, Math.round(meanMs * factor));
+  return wait(ms);
+};
+
+// 对数正态分布随机数（不等待，只返回毫秒值）
+const logNormalRandomMs = (meanMs: number, sigma = 0.5): number => {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  const factor = Math.exp(sigma * z);
+  return Math.max(500, Math.round(meanMs * factor));
+};
+
+// 反自动化检测：注入 stealth 脚本，覆盖常见自动化指纹检测点
+const injectStealthScripts = (window: BrowserWindow): void => {
+  window.webContents.on('dom-ready', () => {
+    window.webContents.executeJavaScript(`
+      (() => {
+        // 移除 webdriver 标志
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+        // 伪造 navigator.plugins
+        if (navigator.plugins.length === 0) {
+          Object.defineProperty(navigator, 'plugins', {
+            get: () => {
+              const p = [
+                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+              ];
+              p.length = 3;
+              return p;
+            },
+          });
+        }
+
+        // 伪造 window.chrome 对象
+        if (!window.chrome) {
+          Object.defineProperty(window, 'chrome', {
+            get: () => ({ runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} }),
+          });
+        }
+
+        // 设置语言为中文
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+
+        // ③ 鼠标移动模拟：周期性派发 mousemove 事件，避免页面检测到无鼠标行为
+        if (!window.__stealthMouseStarted) {
+          window.__stealthMouseStarted = true;
+          let mx = 300 + Math.floor(Math.random() * 600);
+          let my = 200 + Math.floor(Math.random() * 400);
+          setInterval(function() {
+            mx = Math.max(10, Math.min(window.innerWidth - 10,  mx + (Math.random() - 0.5) * 180));
+            my = Math.max(10, Math.min(window.innerHeight - 10, my + (Math.random() - 0.5) * 120));
+            document.dispatchEvent(new MouseEvent('mousemove', {
+              clientX: mx, clientY: my,
+              screenX: mx + 120, screenY: my + 80,
+              bubbles: true, cancelable: true,
+            }));
+          }, 1800 + Math.floor(Math.random() * 3200));
+        }
+      })();
+    `).catch(() => {});
+  });
+};
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMessage = '操作超时'): Promise<T> => {
   return Promise.race([
@@ -366,31 +456,65 @@ const assertNoJdSecurityRiskInElectron = async (window: BrowserWindow) => {
   }
 };
 
+// ④ autoScrollElectronPage：变速滚动 + 随机停顿 + 偶尔回滚，模拟真人阅读式浏览
 const autoScrollElectronPage = async (window: BrowserWindow) => {
   await executeInPage<void>(
     window,
-    `new Promise((resolve) => {
-      let lastHeight = 0;
-      let stableTicks = 0;
-      let maxTicks = 40;
-      const timer = window.setInterval(() => {
-        maxTicks--;
-        window.scrollBy(0, Math.max(600, Math.floor(window.innerHeight * 0.8)));
-        const currentHeight = document.body.scrollHeight;
-
-        if (currentHeight === lastHeight) {
-          stableTicks += 1;
-        } else {
-          stableTicks = 0;
-          lastHeight = currentHeight;
+    `(function() {
+      return new Promise(function(resolve) {
+        var lastHeight = 0;
+        var stableTicks = 0;
+        var maxTicks = 40;
+        var stepsSincePause = 0;
+        var pauseEvery = 2 + Math.floor(Math.random() * 4); // 每滚 2~5 步停一次
+        function logNormalDelay(mean) {
+          var u1 = Math.random() || 0.001;
+          var u2 = Math.random();
+          var z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+          return Math.max(800, Math.round(mean * Math.exp(0.5 * z)));
         }
-
-        if ((window.scrollY + window.innerHeight >= currentHeight - 8 && stableTicks >= 2) || maxTicks <= 0) {
-          window.clearInterval(timer);
-          resolve();
+        function step() {
+          if (maxTicks <= 0) { resolve(); return; }
+          maxTicks--;
+          stepsSincePause++;
+          // 10% 概率往回滚一小段（模拟"回头看"）
+          if (Math.random() < 0.1 && document.documentElement.scrollTop > 300) {
+            var backDist = 100 + Math.floor(Math.random() * 200);
+            document.documentElement.scrollTop -= backDist;
+            document.body.scrollTop -= backDist;
+          }
+          // 正常向下滚动，步长随机 300~900px
+          var dist = 300 + Math.floor(Math.random() * 600);
+          document.documentElement.scrollTop += dist;
+          document.body.scrollTop += dist;
+          var curH = document.body.scrollHeight;
+          if (curH === lastHeight) { stableTicks++; } else { stableTicks = 0; lastHeight = curH; }
+          var atBottom = (document.documentElement.scrollTop + document.documentElement.clientHeight >= curH - 10);
+          if (atBottom && stableTicks >= 2) {
+            // 到底后 50% 概率再往上滚一段（模拟回看）
+            if (Math.random() < 0.5) {
+              var upDist = 300 + Math.floor(Math.random() * 600);
+              document.documentElement.scrollTop = Math.max(0, document.documentElement.scrollTop - upDist);
+              document.body.scrollTop = document.documentElement.scrollTop;
+              setTimeout(resolve, 1500 + Math.floor(Math.random() * 2000));
+            } else {
+              resolve();
+            }
+            return;
+          }
+          // 每滚 2~5 步后随机停顿 1.5~5 秒（模拟"在看内容"）
+          if (stepsSincePause >= pauseEvery) {
+            stepsSincePause = 0;
+            pauseEvery = 2 + Math.floor(Math.random() * 4);
+            var pauseMs = 1500 + Math.floor(Math.random() * 3500);
+            setTimeout(function() { setTimeout(step, logNormalDelay(1500)); }, pauseMs);
+          } else {
+            setTimeout(step, logNormalDelay(1500));
+          }
         }
-      }, 350);
-    })`,
+        step();
+      });
+    })()`,
   ).catch(() => undefined);
 };
 
@@ -413,6 +537,84 @@ const openJdDetailTabInElectron = async (window: BrowserWindow) => {
     })()`,
   ).catch(() => undefined);
   await wait(2_000);
+};
+
+// 随机点击主图缩略图，模拟用户切换查看不同角度的商品图
+const clickRandomMainImage = async (window: BrowserWindow) => {
+  await executeInPage<void>(
+    window,
+    `(() => {
+      const thumbs = document.querySelectorAll(
+        '#spec-list li img, .image-carousel .item img, .image-carouse .item img, #preview img.image'
+      );
+      if (thumbs.length > 1) {
+        const pick = thumbs[Math.floor(Math.random() * thumbs.length)];
+        pick.click();
+      }
+    })()`,
+  ).catch(() => undefined);
+  await logNormalWait(2000);
+};
+
+// 点击评论 tab 停留一会儿再切回，模拟用户偶尔看评论
+const clickCommentTab = async (window: BrowserWindow) => {
+  await executeInPage<void>(
+    window,
+    `(() => {
+      // 尝试多种评论 tab 选择器
+      const selectors = [
+        '#comment-tab-column',
+        '[data-anchor="#comment"]',
+        'a[href*="#comment"]',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el instanceof HTMLElement) { el.click(); return true; }
+      }
+      // 兜底：按文本匹配
+      const byText = Array.from(document.querySelectorAll('a, li, div, span'))
+        .find((node) => node.textContent && node.textContent.trim() === '评论');
+      if (byText instanceof HTMLElement) { byText.click(); return true; }
+      return false;
+    })()`,
+  ).catch(() => undefined);
+  // 停留 2~5 秒再切回详情
+  await logNormalWait(3000);
+  await openJdDetailTabInElectron(window);
+};
+
+// 随机组合 3~6 个页面交互动作，使每个商品的浏览行为序列不同
+const simulateRandomInteractions = async (window: BrowserWindow): Promise<void> => {
+  type Action = { name: string; weight: number; run: () => Promise<void> };
+  const actions: Action[] = [
+    { name: '滚动浏览', weight: 40, run: () => autoScrollElectronPage(window) },
+    { name: '点击主图', weight: 15, run: () => clickRandomMainImage(window) },
+    { name: '详情tab', weight: 20, run: () => openJdDetailTabInElectron(window) },
+    { name: '评论tab', weight: 10, run: () => clickCommentTab(window) },
+    { name: '停留阅读', weight: 15, run: () => logNormalWait(3500) },
+  ];
+  const totalWeight = actions.reduce((s, a) => s + a.weight, 0);
+  const pickAction = (): Action => {
+    let r = Math.random() * totalWeight;
+    for (const a of actions) { r -= a.weight; if (r <= 0) return a; }
+    return actions[0];
+  };
+
+  const count = 3 + Math.floor(Math.random() * 4); // 3~6 个动作
+  const executed: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const action = pickAction();
+    // 避免连续重复同一动作（除了滚动可以连续）
+    if (executed.length > 0 && action.name === executed[executed.length - 1] && action.name !== '滚动浏览') {
+      i--;
+      continue;
+    }
+    console.log(`[交互] 动作${i + 1}/${count}: ${action.name}`);
+    await action.run();
+    executed.push(action.name);
+    // 动作间短暂停顿
+    await logNormalWait(1200);
+  }
 };
 
 const collectJdSectionImageUrlsInElectron = async (window: BrowserWindow) =>
@@ -615,23 +817,113 @@ const fetchJdDescriptionInElectron = async (window: BrowserWindow, skuId: string
   ).catch(() => '');
 };
 
+// ② 解析窗口复用管理器：避免每个任务创建/销毁 BrowserWindow
+class ParseWindowManager {
+  private win: BrowserWindow | null = null;
+  private useCount = 0;
+  private maxUses: number;
+  private readonly partition: string;
+
+  constructor(partition: string) {
+    this.partition = partition;
+    this.maxUses = 18 + Math.floor(Math.random() * 12);
+  }
+
+  async acquire(): Promise<BrowserWindow> {
+    if (!this.win || this.win.isDestroyed() || this.useCount >= this.maxUses) {
+      console.log(`[PARSE-WIN] ${this.win ? '回收旧窗口，已用' + this.useCount + '次' : '首次创建'}`);
+      this.recycle();
+      await wait(600);
+    }
+    this.useCount++;
+    return this.win!;
+  }
+
+  // ⑦ 解析后导航到中性页面，而不是直接关闭，避免最后请求是商品页
+  async release(): Promise<void> {
+    if (!this.win || this.win.isDestroyed()) return;
+    const exits = [
+      'https://www.jd.com/',
+      'https://search.jd.com/Search?keyword=生活用品&enc=utf-8',
+      'https://channel.jd.com/allasite.html',
+    ];
+    await this.win.loadURL(exits[Math.floor(Math.random() * exits.length)]).catch(() => undefined);
+    await randomWait(600, 1_200);
+  }
+
+  invalidate(): void {
+    if (this.win && !this.win.isDestroyed()) this.win.destroy();
+    this.win = null;
+    this.useCount = 0;
+  }
+
+  private recycle(): void {
+    if (this.win && !this.win.isDestroyed()) this.win.destroy();
+    const VIEWPORTS = [
+      { width: 1280, height: 800 }, { width: 1366, height: 768 },
+      { width: 1440, height: 900 }, { width: 1536, height: 864 },
+      { width: 1600, height: 900 }, { width: 1920, height: 1080 },
+    ];
+    const vp = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)];
+    this.win = new BrowserWindow({
+      width: vp.width, height: vp.height, show: false,
+      webPreferences: {
+        contextIsolation: true, nodeIntegration: false,
+        partition: this.partition, backgroundThrottling: false,
+      },
+    });
+    injectStealthScripts(this.win);
+    this.useCount = 0;
+    this.maxUses = 18 + Math.floor(Math.random() * 12);
+    console.log(`[PARSE-WIN] 新窗口 ${vp.width}x${vp.height}，最多复用 ${this.maxUses} 次`);
+  }
+}
+
+let parseWindowManager: ParseWindowManager | null = null;
+
 const parseJdProductAssetsWithElectronSession = async (
   sourceUrl: string,
   profilePartition: string,
+  downloadPolicy?: DownloadPolicy,
 ) => {
   const normalizedUrl = normalizeJdProductUrl(sourceUrl);
-  const parseWindow = new BrowserWindow({
-    width: 1280,
-    height: 900,
-    show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      partition: profilePartition,
-    },
-  });
+  const enablePrewarm = downloadPolicy?.enablePrewarm ?? DEFAULT_DOWNLOAD_POLICY.enablePrewarm;
+
+  if (!parseWindowManager) {
+    parseWindowManager = new ParseWindowManager(profilePartition);
+  }
+
+  const parseWindow = await parseWindowManager.acquire();
 
   try {
+    // ⑤ 多样化入口路径（25% 搜索词进入、40% 分类页、35% 直接导航）
+    if (enablePrewarm) {
+      const roll = Math.random();
+      if (roll < 0.25) {
+        // ⑧ 搜索词进入
+        const kws = ['手机', '家电', '数码配件', '生活用品', '服装', '运动户外'];
+        const kw = kws[Math.floor(Math.random() * kws.length)];
+        console.log(`[PREWARM] 搜索进入: "${kw}"`);
+        await parseWindow.loadURL(
+          `https://search.jd.com/Search?keyword=${encodeURIComponent(kw)}&enc=utf-8`,
+        ).catch(() => undefined);
+        await randomWait(2_500, 5_000);
+      } else if (roll < 0.65) {
+        const pages = [
+          'https://www.jd.com/',
+          'https://channel.jd.com/electronic.html',
+          'https://channel.jd.com/allasite.html',
+          'https://sale.jd.com/',
+        ];
+        const pg = pages[Math.floor(Math.random() * pages.length)];
+        console.log(`[PREWARM] 入口页预热: ${pg}`);
+        await parseWindow.loadURL(pg).catch(() => undefined);
+        await randomWait(2_000, 4_500);
+      } else {
+        console.log('[PREWARM] 直接导航（无预热）');
+      }
+    }
+
     try {
       await withTimeout(parseWindow.loadURL(normalizedUrl), 30_000, '页面加载超时');
     } catch (loadError: unknown) {
@@ -645,31 +937,60 @@ const parseJdProductAssetsWithElectronSession = async (
         throw loadError;
       }
     }
-    await wait(2_000);
+    await logNormalWait(2500);
     await assertNoJdSecurityRiskInElectron(parseWindow);
-    await autoScrollElectronPage(parseWindow);
-    await openJdDetailTabInElectron(parseWindow);
-    await autoScrollElectronPage(parseWindow);
-    await wait(1_000);
+
+    // 记录页面加载完成时间，用于后续确保最低停留时间
+    const pageLoadDone = Date.now();
+    const minDwellMs = logNormalRandomMs(18_000, 0.3); // 12~25 秒，均值 18s
+
+    // 随机化交互序列：每个商品的行为模式不同
+    await simulateRandomInteractions(parseWindow);
+
+    // 补足最低页面停留时间（如果随机操作执行得快，额外等待以达到最低停留）
+    const elapsed = Date.now() - pageLoadDone;
+    if (elapsed < minDwellMs) {
+      const remainMs = minDwellMs - elapsed;
+      console.log(`[交互] 补足停留时间: ${Math.round(remainMs / 1000)}s (已停留 ${Math.round(elapsed / 1000)}s, 目标 ${Math.round(minDwellMs / 1000)}s)`);
+      await logNormalWait(remainMs);
+    }
+
     await assertNoJdSecurityRiskInElectron(parseWindow);
 
     const sectionImageUrls = await collectJdSectionImageUrlsInElectron(parseWindow);
 
     // === 调试日志（主进程终端） ===
+    const currentUrl = parseWindow.webContents.getURL();
+    console.log('[DEBUG] current URL:', currentUrl);
     console.log('[DEBUG] sectionImageUrls.main count:', sectionImageUrls.main.length);
     console.log('[DEBUG] sectionImageUrls.detail count:', sectionImageUrls.detail.length);
+    if (sectionImageUrls.main.length > 0) {
+      sectionImageUrls.main.slice(0, 3).forEach((url, i) => console.log(`[DEBUG] main[${i}]:`, url));
+    }
     if (sectionImageUrls.detail.length > 0) {
-      console.log('[DEBUG] detail[0]:', sectionImageUrls.detail[0]);
-    } else {
-      console.log('[DEBUG] detail is EMPTY - DOM selectors did not match any detail images');
+      sectionImageUrls.detail.slice(0, 3).forEach((url, i) => console.log(`[DEBUG] detail[${i}]:`, url));
+    }
+    if (sectionImageUrls.sku.length > 0) {
+      console.log('[DEBUG] sku count:', sectionImageUrls.sku.length);
     }
 
     const [html, pageTitle] = await Promise.all([
       executeInPage<string>(parseWindow, 'document.documentElement.outerHTML'),
       executeInPage<string>(parseWindow, 'document.title'),
     ]);
+    console.log('[DEBUG] pageTitle:', pageTitle);
+    console.log('[DEBUG] html length:', html.length);
     const skuId = extractJdSkuId(normalizedUrl);
-    const descriptionHtml = skuId ? await fetchJdDescriptionInElectron(parseWindow, skuId) : undefined;
+    // 详情 API 调用随机化：85% 概率调用，15% 概率跳过（只用 DOM 提取）
+    const shouldFetchDesc = skuId && Math.random() < 0.85;
+    if (skuId && !shouldFetchDesc) {
+      console.log('[DEBUG] 跳过详情 API 调用（随机跳过）');
+    }
+    // 调用前随机延迟 1~4 秒，避免提取后立刻调 API 的固定模式
+    if (shouldFetchDesc) {
+      await logNormalWait(2000);
+    }
+    const descriptionHtml = shouldFetchDesc ? await fetchJdDescriptionInElectron(parseWindow, skuId!) : undefined;
     console.log('[DEBUG] descriptionHtml length:', descriptionHtml?.length ?? 0);
     if (descriptionHtml && descriptionHtml.length > 0) {
       console.log('[DEBUG] descriptionHtml preview:', descriptionHtml.slice(0, 200));
@@ -683,20 +1004,160 @@ const parseJdProductAssetsWithElectronSession = async (
       pageTitle,
       sectionImageUrls,
     }, descriptionHtml);
-    console.log('[DEBUG] parsed detail count:', result.images.detail.length, '| unknown count:', result.images.unknown.length);
+    console.log('[DEBUG] parsed main count:', result.images.main.length,
+      '| detail count:', result.images.detail.length,
+      '| sku count:', result.images.sku.length,
+      '| unknown count:', result.images.unknown.length);
     if (result.images.unknown.length > 0) {
-      console.log('[DEBUG] unknown[0]:', result.images.unknown[0].url);
+      console.log('[DEBUG] unknown samples:');
+      result.images.unknown.slice(0, 5).forEach((item, i) => console.log(`  [${i}]`, item.url));
     }
     return result;
+  } catch (err) {
+    // 安全风险或频繁失败时，让窗口作废，下次重建
+    parseWindowManager?.invalidate();
+    throw err;
   } finally {
-    parseWindow.destroy();
+    // ⑦ 解析后导航到中性页，不直接关闭窗口
+    await parseWindowManager?.release();
   }
 };
 
-const createTaskQueue = (initialTasks: DownloadTask[]) =>
-  new TaskQueue({
+const simulateJdBrowse = async (profilePartition: string, browsePauseMin: number, browsePauseMax: number): Promise<void> => {
+  // ⑥ 超长休眠：3% 概率触发 5~15 分钟完全休眠，模拟用户暂时离开
+  if (Math.random() < 0.03) {
+    const longMs = 300_000 + Math.random() * 600_000;
+    console.log(`[COOLDOWN] ⏳ 超长休眠 ${Math.round(longMs / 60_000)} 分钟（模拟用户离开）`);
+    await wait(longMs);
+    return;
+  }
+
+  // 60% 概率只是普通暂停休息
+  if (Math.random() < 0.6) {
+    const pauseMs = browsePauseMin * 1_000 + Math.random() * (browsePauseMax - browsePauseMin) * 1_000;
+    console.log(`[COOLDOWN] 暂停休息 ${Math.round(pauseMs / 1000)}s（范围 ${browsePauseMin}~${browsePauseMax}s）`);
+    await wait(pauseMs);
+    return;
+  }
+
+  const browseWindow = new BrowserWindow({
+    width: 1280,
+    height: 900,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: profilePartition,
+      backgroundThrottling: false, // 禁止后台节流，确保 setInterval 正常运行
+    },
+  });
+
+  injectStealthScripts(browseWindow);
+
+  // 随机选择起始页面
+  const entryPages = [
+    'https://www.jd.com/',
+    'https://channel.jd.com/allasite.html',
+    'https://www.jd.com/chaoshi.html',
+    'https://channel.jd.com/electronic.html',
+  ];
+  const startUrl = entryPages[Math.floor(Math.random() * entryPages.length)];
+  console.log('[COOLDOWN] 模拟浏览开始:', startUrl);
+
+  try {
+    await browseWindow.loadURL(startUrl);
+    await randomWait(3_000, 6_000);
+
+    // 随机执行 5~10 轮浏览动作
+    const rounds = 5 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < rounds; i++) {
+      // 检查窗口是否已被销毁
+      if (browseWindow.isDestroyed()) break;
+
+      const action = Math.random();
+
+      if (action < 0.4) {
+        // 动作1：点击页面上的随机链接（商品/分类/轮播）
+        const clicked = await executeInPage<boolean>(
+          browseWindow,
+          `(() => {
+            const candidates = Array.from(document.querySelectorAll('a[href]'))
+              .filter(a => {
+                const href = a.href || '';
+                return (href.includes('item.jd.com') || href.includes('channel.jd.com')
+                  || href.includes('list.jd.com') || href.includes('cate.jd.com'))
+                  && a.offsetParent !== null;
+              });
+            if (candidates.length === 0) return false;
+            const pick = candidates[Math.floor(Math.random() * candidates.length)];
+            pick.click();
+            return true;
+          })()`,
+        ).catch(() => false);
+
+        if (clicked) {
+          console.log(`[COOLDOWN] 动作${i + 1}: 点击链接，等待页面加载`);
+          await randomWait(4_000, 8_000);
+        } else {
+          await scrollRandom(browseWindow, i + 1);
+        }
+      } else if (action < 0.7) {
+        // 动作2：滚动浏览
+        await scrollRandom(browseWindow, i + 1);
+      } else {
+        // 动作3：模拟阅读停留
+        const pauseMs = 3_000 + Math.random() * 6_000;
+        console.log(`[COOLDOWN] 动作${i + 1}: 停留阅读 ${Math.round(pauseMs / 1000)}s`);
+        await wait(pauseMs);
+      }
+    }
+
+    console.log('[COOLDOWN] 模拟浏览完成');
+  } catch (e) {
+    console.log('[COOLDOWN] 模拟浏览出错（不影响主流程）:', String(e));
+  } finally {
+    if (!browseWindow.isDestroyed()) {
+      browseWindow.destroy();
+    }
+  }
+};
+
+const scrollRandom = async (window: BrowserWindow, step: number): Promise<void> => {
+  const scrolls = 4 + Math.floor(Math.random() * 6);
+  const intervalMs = 600 + Math.floor(Math.random() * 600); // 600~1200ms 间隔
+  console.log(`[COOLDOWN] 动作${step}: 滚动 ${scrolls} 次，间隔 ${intervalMs}ms`);
+  await executeInPage<void>(
+    window,
+    `(function() {
+      return new Promise(function(resolve) {
+        var count = 0;
+        var scrolls = ${scrolls};
+        var timer = setInterval(function() {
+          var distance = 200 + Math.floor(Math.random() * 500);
+          document.documentElement.scrollTop += distance;
+          document.body.scrollTop += distance;
+          count++;
+          if (count >= scrolls) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, ${intervalMs});
+      });
+    })()`,
+  ).catch(() => undefined);
+  await randomWait(1_500, 3_000);
+};
+
+const createTaskQueue = (initialTasks: DownloadTask[]) => {
+  // 记录最近一个正在执行任务的 Policy，供 TaskQueue 读取冷却参数
+  let activePolicy: DownloadPolicy | undefined;
+
+  return new TaskQueue({
     concurrency: 1,
     initialTasks,
+    getActivePolicyFn: () => activePolicy,
+    onBrowseCooldown: (browsePauseMin, browsePauseMax) =>
+      simulateJdBrowse(authProfileManager.getPartition('jd'), browsePauseMin, browsePauseMax),
     onChange: (tasks) => {
       void saveAppState(tasks);
       handleQueueChangeForNotifications(tasks);
@@ -706,15 +1167,19 @@ const createTaskQueue = (initialTasks: DownloadTask[]) =>
       parseProductAssets: async (task) => {
         const platformId = task.platform;
         if (!platformId) throw new Error('任务缺少 platformId');
-        
+
         const platform = platformAdapters.find((p) => p.id === platformId);
         if (!platform) throw new Error(`不支持或未知的平台: ${platformId}`);
+
+        // 将当前任务的 Policy 暴露给 TaskQueue
+        activePolicy = task.downloadPolicy;
 
         switch (platformId) {
           case 'jd':
             return parseJdProductAssetsWithElectronSession(
               task.sourceUrl,
               authProfileManager.getPartition(platformId),
+              task.downloadPolicy,
             );
           default:
             return platform.parseProductAssets({
@@ -734,6 +1199,7 @@ const createTaskQueue = (initialTasks: DownloadTask[]) =>
         }),
     }),
   });
+};
 
 const createMainWindow = () => {
   const window = new BrowserWindow({
@@ -816,6 +1282,8 @@ ipcMain.handle('auth:login', async (_event, platformId: string) => {
       partition: authProfileManager.getPartition(platform.id),
     },
   });
+
+  injectStealthScripts(loginWindow);
 
   loginWindow.on('closed', () => {
     void refreshPlatformAuthStatus(platform.id);
@@ -985,6 +1453,14 @@ ipcMain.handle('task:clear-completed', () => taskQueue.clearCompleted());
 
 ipcMain.handle('task:clear-failed', () => taskQueue.clearFailed());
 
+ipcMain.handle('task:clear-pending', () => taskQueue.clearPending());
+
+ipcMain.handle('task:queue-status', () => ({
+  autoPaused: taskQueue.autoPaused,
+  consecutiveFailures: taskQueue.consecutiveFailures,
+  threshold: TaskQueue.AUTO_PAUSE_THRESHOLD,
+}));
+
 ipcMain.handle('task:remove', (_event, taskId: string) => taskQueue.removeTask(taskId));
 
 ipcMain.handle('task:open-output', async (_event, taskId: string) => {
@@ -1022,6 +1498,8 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  parseWindowManager?.invalidate();
+  parseWindowManager = null;
   if (process.platform !== 'darwin') {
     app.quit();
   }

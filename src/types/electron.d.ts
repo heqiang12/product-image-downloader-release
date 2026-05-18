@@ -14,6 +14,13 @@ export interface DownloadPolicy {
   safeMode: boolean;
   imageConcurrency: number;
   requestDelayMs: number;
+  // ── 反风控节奏控制参数 ──
+  taskCooldownMin: number;   // 任务间最小冷却时间（秒）
+  taskCooldownMax: number;   // 任务间最大冷却时间（秒）
+  browsePauseMin: number;    // 模拟浏览/长休最短时长（秒）
+  browsePauseMax: number;    // 模拟浏览/长休最长时长（秒）
+  browseInterval: number;    // 每完成 N 个任务触发一次浏览休息
+  enablePrewarm: boolean;    // 解析前是否先访问京东首页做预热导航
 }
 
 export interface ParsedImageUrls {
@@ -130,6 +137,12 @@ declare global {
       retryFailed: () => Promise<DownloadTask[]>;
       clearCompleted: () => Promise<DownloadTask[]>;
       clearFailed: () => Promise<DownloadTask[]>;
+      clearPending: () => Promise<DownloadTask[]>;
+      getQueueStatus: () => Promise<{
+        autoPaused: boolean;
+        consecutiveFailures: number;
+        threshold: number;
+      }>;
       removeTask: (taskId: string) => Promise<DownloadTask[]>;
       openOutput: (taskId: string) => Promise<{
         ok: boolean;

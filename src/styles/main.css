@@ -483,6 +483,61 @@ input[type="checkbox"]:hover, input[type="radio"]:hover {
   font-size: 12px;
 }
 
+.advanced-policy-toggle {
+  margin-top: 12px;
+}
+
+.advanced-policy-toggle .toggle-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.safe-mode-hint {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--success-color);
+}
+
+.advanced-policy-fields {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f1f5f9;
+  border: 1px dashed var(--border-base);
+  border-radius: var(--radius-md);
+}
+
+.advanced-policy-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.advanced-policy-row:last-child {
+  margin-bottom: 0;
+}
+
+.advanced-policy-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.advanced-policy-row input[type="number"] {
+  width: 70px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.advanced-policy-row .checkbox-label {
+  cursor: pointer;
+  user-select: none;
+}
+
+
 /* =========================================
    Task Area & Table
    ========================================= */
@@ -612,6 +667,35 @@ input[type="checkbox"]:hover, input[type="radio"]:hover {
 
 .failure-notice strong {
   color: #7f1d1d;
+}
+
+.auto-pause-notice {
+  color: #991b1b;
+  background: linear-gradient(135deg, #fef2f2, #fff1f2);
+  border: 1px solid #fca5a5;
+  border-left: 5px solid var(--danger-color);
+  box-shadow: 0 10px 24px rgba(239, 68, 68, 0.16);
+}
+
+.auto-pause-notice strong {
+  color: #7f1d1d;
+  font-size: 15px;
+}
+
+.auto-pause-notice button {
+  background: var(--danger-color);
+  box-shadow: none;
+  color: #fff;
+}
+
+.auto-pause-notice button:hover:not(:disabled) {
+  background: #b91c1c;
+  box-shadow: var(--shadow-sm);
+}
+
+.auto-pause-actions {
+  display: flex;
+  gap: 8px;
 }
 
 table {

@@ -8,6 +8,12 @@ const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
   safeMode: true,
   imageConcurrency: 2,
   requestDelayMs: 800,
+  taskCooldownMin: 20,
+  taskCooldownMax: 50,
+  browsePauseMin: 60,
+  browsePauseMax: 180,
+  browseInterval: 5,
+  enablePrewarm: true,
 };
 
 export type ProductParser = (task: DownloadTask) => Promise<ProductAssets>;

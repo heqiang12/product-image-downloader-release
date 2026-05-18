@@ -111,7 +111,9 @@ const downloadOneAsset = async (
       lastError = error;
 
       if (attempt <= options.retries) {
-        await sleep(150 * attempt);
+        // 指数退避：500ms, 1000ms, 2000ms ... 上限 10 秒
+        const backoffMs = Math.min(500 * Math.pow(2, attempt - 1), 10_000);
+        await sleep(backoffMs);
       }
     }
   }
@@ -146,6 +148,18 @@ export const downloadProductAssets = async (
   await ensureDir(outputDir);
 
   let cursor = 0;
+  let lastRequestTime = 0;
+
+  // 全局速率限制：确保任意两次请求间隔不低于 minInterval（含 ±30% 随机抖动）
+  const globalGate = async (minInterval: number) => {
+    if (minInterval <= 0) return;
+    const elapsed = Date.now() - lastRequestTime;
+    const jitter = minInterval * (0.7 + Math.random() * 0.6); // 70%~130% 范围
+    if (elapsed < jitter) {
+      await sleep(jitter - elapsed);
+    }
+    lastRequestTime = Date.now();
+  };
 
   const worker = async () => {
     while (cursor < assets.length) {
@@ -156,8 +170,8 @@ export const downloadProductAssets = async (
       progress.current = asset.url;
       options.onProgress?.({ ...progress });
 
-      if (requestDelayMs > 0 && currentIndex > 0) {
-        await sleep(requestDelayMs);
+      if (currentIndex > 0) {
+        await globalGate(requestDelayMs);
       }
 
       const result = await downloadOneAsset(asset, currentIndex + 1, outputDir, {
