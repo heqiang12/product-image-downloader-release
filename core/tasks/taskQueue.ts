@@ -3,24 +3,14 @@ import type { AssetType } from '../parsers/types.js';
 import type {
   DownloadPolicy,
   DownloadTask,
+  TaskFailureKind,
   TaskMode,
   TaskPatch,
   TaskProcessor,
   TaskQueueOptions,
+  QueueRunState,
 } from './types.js';
-
-// 安全模式默认策略（用于在无法获取 Policy 时的兜底）
-const DEFAULT_POLICY: DownloadPolicy = {
-  safeMode: true,
-  imageConcurrency: 2,
-  requestDelayMs: 800,
-  taskCooldownMin: 20,
-  taskCooldownMax: 50,
-  browsePauseMin: 60,
-  browsePauseMax: 180,
-  browseInterval: 5,
-  enablePrewarm: true,
-};
+import { DEFAULT_DOWNLOAD_POLICY } from './downloadPolicy.js';
 
 const createTaskId = (): string =>
   `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -38,6 +28,10 @@ export class TaskQueue {
 
   private readonly onBrowseCooldown?: (browsePauseMin: number, browsePauseMax: number) => Promise<void>;
 
+  private readonly onSecurityRisk?: (task: DownloadTask, failureKind: TaskFailureKind) => void;
+
+  private readonly onAutoPaused?: (tasks: DownloadTask[]) => void;
+
   private readonly tasks = new Map<string, DownloadTask>();
 
   private runningCount = 0;
@@ -53,6 +47,21 @@ export class TaskQueue {
 
   autoPaused = false;
 
+  /** 当前队列运行状态 */
+  runState: QueueRunState = 'idle';
+
+  /** 冷却结束时间戳（毫秒），前端可用于倒计时 */
+  cooldownUntil?: number;
+
+  /** 最近一次失败的错误信息 */
+  lastErrorMessage?: string;
+
+  /** 最近一次失败的错误类型 */
+  lastFailureKind?: TaskFailureKind;
+
+  /** 当前正在执行的任务 ID */
+  currentTaskId?: string;
+
   static readonly AUTO_PAUSE_THRESHOLD = 3;
 
   constructor(options: TaskQueueOptions) {
@@ -61,6 +70,8 @@ export class TaskQueue {
     this.onChange = options.onChange;
     this.getActivePolicyFn = options.getActivePolicyFn;
     this.onBrowseCooldown = options.onBrowseCooldown;
+    this.onSecurityRisk = options.onSecurityRisk;
+    this.onAutoPaused = options.onAutoPaused;
     // 初始 nextBrowseAt 在 start() 时根据 Policy 重置
     this.nextBrowseAt = 0;
 
@@ -71,7 +82,7 @@ export class TaskQueue {
 
   /** 获取当前活跃 Policy，无法获取时用安全模式兜底 */
   private getPolicy(): DownloadPolicy {
-    return this.getActivePolicyFn?.() ?? DEFAULT_POLICY;
+    return this.getActivePolicyFn?.() ?? DEFAULT_DOWNLOAD_POLICY;
   }
 
   /** 计算本次浏览触发的下一个阈值 */
@@ -146,13 +157,20 @@ export class TaskQueue {
     this.autoPaused = false;
     this.consecutiveFailures = 0;
     this.completedCount = 0;
+    this.lastErrorMessage = undefined;
+    this.lastFailureKind = undefined;
+    this.cooldownUntil = undefined;
     this.nextBrowseAt = this.nextBrowseThreshold(policy);
+    this.runState = 'running';
     this.pump();
     return this.listTasks();
   }
 
   pause(): DownloadTask[] {
     this.isStarted = false;
+    this.runState = 'paused';
+    this.cooldownUntil = undefined;
+    this.currentTaskId = undefined;
     this.emitChange();
     return this.listTasks();
   }
@@ -165,6 +183,7 @@ export class TaskQueue {
         retriedCount += 1;
         this.patchTask(task.id, {
           status: 'pending',
+          failureKind: undefined,
           errorMessage: undefined,
           progress: {
             total: 0,
@@ -181,6 +200,10 @@ export class TaskQueue {
       this.autoPaused = false;
       this.consecutiveFailures = 0;
       this.completedCount = 0;
+      this.lastErrorMessage = undefined;
+      this.lastFailureKind = undefined;
+      this.cooldownUntil = undefined;
+      this.runState = 'running';
       this.nextBrowseAt = this.nextBrowseThreshold(policy);
     }
 
@@ -238,6 +261,30 @@ export class TaskQueue {
     return this.tasks.get(id);
   }
 
+  getQueueStatus() {
+    const tasks = this.listTasks();
+    const current = this.currentTaskId ? this.tasks.get(this.currentTaskId) : undefined;
+    return {
+      state: this.runState,
+      autoPaused: this.autoPaused,
+      consecutiveFailures: this.consecutiveFailures,
+      threshold: TaskQueue.AUTO_PAUSE_THRESHOLD,
+      cooldownUntil: this.cooldownUntil,
+      lastErrorMessage: this.lastErrorMessage,
+      lastFailureKind: this.lastFailureKind,
+      counts: {
+        total: tasks.length,
+        pending: tasks.filter((t) => t.status === 'pending').length,
+        running: tasks.filter((t) => t.status === 'parsing' || t.status === 'downloading').length,
+        success: tasks.filter((t) => t.status === 'success').length,
+        failed: tasks.filter((t) => t.status === 'failed').length,
+      },
+      currentTask: current
+        ? { id: current.id, title: current.title, skuId: current.skuId, sourceUrl: current.sourceUrl, status: current.status }
+        : undefined,
+    };
+  }
+
   private patchTask(id: string, patch: TaskPatch): void {
     const task = this.tasks.get(id);
 
@@ -286,6 +333,9 @@ export class TaskQueue {
       if (!task) {
         if (this.runningCount === 0) {
           this.isStarted = false;
+          const hasFailed = this.listTasks().some((t) => t.status === 'failed');
+          this.runState = hasFailed ? 'failed' : 'completed';
+          this.currentTaskId = undefined;
         }
         return;
       }
@@ -296,6 +346,8 @@ export class TaskQueue {
 
   private runTask(task: DownloadTask): void {
     this.runningCount += 1;
+    this.currentTaskId = task.id;
+    this.runState = 'running';
     this.patchTask(task.id, { status: 'parsing' });
 
     void this.processor(this.tasks.get(task.id) || task, (patch) => this.patchTask(task.id, patch))
@@ -309,16 +361,35 @@ export class TaskQueue {
         }
       })
       .catch((error: unknown) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        // 从错误对象中提取 failureKind（由 JdSecurityRiskError 等自定义错误类携带）
+        const errorFailureKind = (error as { failureKind?: TaskFailureKind })?.failureKind;
+        const securityKinds: TaskFailureKind[] = ['securityRisk', 'captcha', 'authExpired'];
+        const isSecurityError = errorFailureKind && securityKinds.includes(errorFailureKind);
+
         this.patchTask(task.id, {
           status: 'failed',
-          errorMessage: error instanceof Error ? error.message : String(error),
+          failureKind: errorFailureKind,
+          errorMessage,
         });
         this.consecutiveFailures += 1;
+        this.lastErrorMessage = errorMessage;
+        this.lastFailureKind = errorFailureKind;
 
-        // 连续失败达到阈值，自动暂停队列
-        if (this.consecutiveFailures >= TaskQueue.AUTO_PAUSE_THRESHOLD) {
+        if (isSecurityError) {
+          // 安全类错误：一次即暂停，不等待连续失败达到阈值
           this.isStarted = false;
           this.autoPaused = true;
+          this.runState = 'securityBlocked';
+          this.currentTaskId = undefined;
+          this.onSecurityRisk?.(task, errorFailureKind!);
+        } else if (this.consecutiveFailures >= TaskQueue.AUTO_PAUSE_THRESHOLD) {
+          // 非安全错误：连续失败达到阈值，自动暂停队列
+          this.isStarted = false;
+          this.autoPaused = true;
+          this.runState = 'autoPaused';
+          this.currentTaskId = undefined;
+          this.onAutoPaused?.(this.listTasks());
         }
       })
       .finally(async () => {
@@ -329,18 +400,23 @@ export class TaskQueue {
         if (hasMorePending && this.isStarted) {
           const policy = this.getPolicy();
 
-          // 达到浏览休息阈值：触发模拟浏览/长休
+          // 达到浏览休息阈值：触发纯休眠长休
           if (
             this.nextBrowseAt > 0 &&
             this.onBrowseCooldown &&
             this.completedCount >= this.nextBrowseAt
           ) {
             this.nextBrowseAt = this.nextBrowseThreshold(policy);
+            this.runState = 'cooling';
+            this.currentTaskId = undefined;
+            this.cooldownUntil = Date.now() + policy.browsePauseMax * 1_000;
+            this.emitChange();
             try {
               await this.onBrowseCooldown(policy.browsePauseMin, policy.browsePauseMax);
             } catch {
-              // 浏览模拟失败不影响主流程
+              // 休眠失败不影响主流程
             }
+            this.cooldownUntil = undefined;
           } else {
             // 渐进式冷却：随任务累积自动拉长间隔，降低被计数器命中的风险
             // 每完成 8 个任务增加 20% 冷却时长，最高 2.5 倍
@@ -348,17 +424,30 @@ export class TaskQueue {
             const minMs = policy.taskCooldownMin * 1_000 * progressFactor;
             const maxMs = policy.taskCooldownMax * 1_000 * progressFactor;
             const cooldownMs = minMs + Math.random() * (maxMs - minMs);
+            this.runState = 'cooling';
+            this.currentTaskId = undefined;
+            this.cooldownUntil = Date.now() + cooldownMs;
+            this.emitChange();
             console.log(
               `[COOLDOWN] 任务间冷却 ${Math.round(cooldownMs / 1000)}s` +
               ` (已完成第 ${this.completedCount} 个, 渐进系数 ${progressFactor.toFixed(1)}x)`,
             );
             await sleep(cooldownMs);
+            this.cooldownUntil = undefined;
           }
         }
 
         if (this.isStarted) {
+          // 检查是否全部完成
+          const remaining = this.listTasks().some((t) => t.status === 'pending');
+          if (!remaining) {
+            const hasFailed = this.listTasks().some((t) => t.status === 'failed');
+            this.runState = hasFailed ? 'failed' : 'completed';
+            this.currentTaskId = undefined;
+          }
           this.pump();
         } else {
+          this.currentTaskId = undefined;
           this.emitChange();
         }
       });

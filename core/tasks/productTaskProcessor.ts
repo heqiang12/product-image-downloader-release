@@ -2,19 +2,9 @@ import type { AssetType, ProductAssets } from '../parsers/types.js';
 import type { ProductDownloadResult } from '../downloader/types.js';
 import { platformAdapters } from '../platforms/registry.js';
 import type { AssetCounts, DownloadPolicy, DownloadTask, ParsedImageUrls, TaskProcessor } from './types.js';
+import { DEFAULT_DOWNLOAD_POLICY } from './downloadPolicy.js';
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
-const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
-  safeMode: true,
-  imageConcurrency: 2,
-  requestDelayMs: 800,
-  taskCooldownMin: 20,
-  taskCooldownMax: 50,
-  browsePauseMin: 60,
-  browsePauseMax: 180,
-  browseInterval: 5,
-  enablePrewarm: true,
-};
 
 export type ProductParser = (task: DownloadTask) => Promise<ProductAssets>;
 

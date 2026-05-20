@@ -17,6 +17,22 @@ import type { PlatformCookie } from '../core/platforms/types';
 import type { AssetType } from '../core/parsers/types';
 import { parseJdAssetsFromSnapshot } from '../core/parsers/jdParser';
 import { extractJdSkuId, normalizeJdProductUrl } from '../core/parsers/jdUrl';
+import type { TaskFailureKind } from '../core/tasks/types';
+import { DEFAULT_DOWNLOAD_POLICY, RISK_PACE_PRESETS } from '../core/tasks/downloadPolicy';
+import type { RiskPaceLevel } from '../core/tasks/types';
+
+// ── 错误分类：用于标记任务失败原因，安全类错误触发一次即暂停 ──
+class JdSecurityRiskError extends Error {
+  readonly failureKind: TaskFailureKind = 'securityRisk';
+}
+
+class JdCaptchaRequiredError extends Error {
+  readonly failureKind: TaskFailureKind = 'captcha';
+}
+
+class JdAuthExpiredError extends Error {
+  readonly failureKind: TaskFailureKind = 'authExpired';
+}
 
 let outputRoot = '';
 let taskQueue: TaskQueue;
@@ -25,21 +41,11 @@ let authProfileManager: AuthProfileManager;
 let mainWindow: BrowserWindow | null = null;
 let queueNotificationActive = false;
 let lastPauseNotificationAt = 0;
+let lastSecurityRiskNotificationAt = 0;
 let updateCheckStarted = false;
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
 const VALID_ASSET_TYPES = new Set<AssetType>(['main', 'detail', 'sku', 'unknown']);
-const DEFAULT_DOWNLOAD_POLICY: DownloadPolicy = {
-  safeMode: true,
-  imageConcurrency: 2,
-  requestDelayMs: 800,
-  taskCooldownMin: 20,
-  taskCooldownMax: 50,
-  browsePauseMin: 60,
-  browsePauseMax: 180,
-  browseInterval: 5,
-  enablePrewarm: true,
-};
 const APP_DISPLAY_NAME = '商品图片下载助手';
 const APP_USER_MODEL_ID = 'com.product-image-downloader.app';
 
@@ -80,7 +86,11 @@ const normalizeDownloadPolicy = (value: unknown): DownloadPolicy => {
   const safeMode = candidate.safeMode !== false;
 
   if (safeMode) {
-    return { ...DEFAULT_DOWNLOAD_POLICY };
+    const paceLevels: RiskPaceLevel[] = ['fast', 'standard', 'conservative'];
+    const pace = paceLevels.includes(candidate.riskPaceLevel as RiskPaceLevel)
+      ? (candidate.riskPaceLevel as RiskPaceLevel)
+      : 'standard';
+    return { ...RISK_PACE_PRESETS[pace] };
   }
 
   // 自定义模式：每个字段独立校验，不合法时使用宽松的默认值
@@ -222,6 +232,70 @@ const showPauseNotification = (tasks: DownloadTask[]) => {
     counts.running > 0 ? `${counts.running} 个正在执行的任务会完成当前步骤后停止` : '当前没有正在执行的任务';
 
   showSystemNotification('队列已暂停', `${pendingText}，${runningText}。`);
+};
+
+const showSecurityRiskNotification = () => {
+  const now = Date.now();
+  // 同类通知 3 秒内只发一次（防抖）
+  if (now - lastSecurityRiskNotificationAt < 3_000) {
+    return;
+  }
+
+  lastSecurityRiskNotificationAt = now;
+  showSystemNotification(
+    '京东需要手动验证',
+    '队列已暂停，请打开验证页面完成京东安全验证后重试。',
+  );
+};
+
+/** 打开手动验证窗口，供 IPC handler 和弹窗按钮共用 */
+const openManualVerifyWindow = async (platformId: string, taskId?: string): Promise<{ ok: boolean; errorMessage?: string }> => {
+  const task = taskId ? taskQueue.getTask(taskId) : undefined;
+  const platform = platformAdapters.find((item) => item.id === platformId);
+  const targetUrl = task?.sourceUrl || platform?.homeUrl || platform?.loginUrl;
+
+  if (!targetUrl) {
+    return { ok: false, errorMessage: '无法确定验证页面地址' };
+  }
+
+  const verifyWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    show: true,
+    title: '京东手动验证',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: authProfileManager.getPartition(platformId),
+    },
+  });
+
+  injectStealthScripts(verifyWindow);
+  await verifyWindow.loadURL(targetUrl);
+
+  return { ok: true };
+};
+
+/** 安全风控强提示：系统通知 + 应用弹窗 */
+const showSecurityRiskAlert = async (task?: DownloadTask) => {
+  showSecurityRiskNotification();
+
+  const result = await dialog.showMessageBox(mainWindow!, {
+    type: 'warning',
+    title: '京东需要手动验证',
+    message: '京东需要手动验证',
+    detail: '京东返回安全验证或账号风险页面，队列已暂停。请打开验证页面手动完成验证或正常浏览当前商品，完成后回到应用重试失败任务。',
+    buttons: ['打开验证页面', '稍后处理'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+
+  if (result.response === 0) {
+    const platformId = task?.platform || 'jd';
+    const taskId = task?.id;
+    await openManualVerifyWindow(platformId, taskId);
+  }
 };
 
 const setupAutoUpdater = () => {
@@ -450,7 +524,7 @@ const assertNoJdSecurityRiskInElectron = async (window: BrowserWindow) => {
   ).catch(() => '');
 
   if (/账号存在安全风险|暂无法在京东网页端使用|京东商城\s*APP|完成安全验证|安全风险/.test(pageText)) {
-    throw new Error(
+    throw new JdSecurityRiskError(
       '京东提示账号存在安全风险，已停止本次解析。请先在京东商城 APP 完成安全验证，短时间内不要继续重复登录或批量下载。',
     );
   }
@@ -839,16 +913,11 @@ class ParseWindowManager {
     return this.win!;
   }
 
-  // ⑦ 解析后导航到中性页面，而不是直接关闭，避免最后请求是商品页
+  // ⑦ 解析后释放窗口：导航到 about:blank 避免额外京东访问
   async release(): Promise<void> {
     if (!this.win || this.win.isDestroyed()) return;
-    const exits = [
-      'https://www.jd.com/',
-      'https://search.jd.com/Search?keyword=生活用品&enc=utf-8',
-      'https://channel.jd.com/allasite.html',
-    ];
-    await this.win.loadURL(exits[Math.floor(Math.random() * exits.length)]).catch(() => undefined);
-    await randomWait(600, 1_200);
+    await this.win.loadURL('about:blank').catch(() => undefined);
+    await randomWait(300, 800);
   }
 
   invalidate(): void {
@@ -880,6 +949,35 @@ class ParseWindowManager {
 }
 
 let parseWindowManager: ParseWindowManager | null = null;
+
+// 轻量滚动：只滚动 1-2 次，短暂停留，用于按需补充详情图
+const lightScrollElectronPage = async (window: BrowserWindow): Promise<void> => {
+  const scrolls = 1 + Math.floor(Math.random() * 2); // 1~2 次
+  await executeInPage<void>(
+    window,
+    `(function() {
+      return new Promise(function(resolve) {
+        var count = 0;
+        var scrolls = ${scrolls};
+        var timer = setInterval(function() {
+          var distance = 400 + Math.floor(Math.random() * 400);
+          document.documentElement.scrollTop += distance;
+          document.body.scrollTop += distance;
+          count++;
+          if (count >= scrolls) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 800 + Math.floor(Math.random() * 600));
+      });
+    })()`,
+  ).catch(() => undefined);
+  await randomWait(1_500, 3_000);
+};
+
+// 判断采集结果是否足够：主图存在且详情图达到阈值
+const hasEnoughImages = (sectionImageUrls: { main: string[]; detail: string[]; sku: string[] }) =>
+  sectionImageUrls.main.length > 0 && sectionImageUrls.detail.length >= 3;
 
 const parseJdProductAssetsWithElectronSession = async (
   sourceUrl: string,
@@ -930,48 +1028,74 @@ const parseJdProductAssetsWithElectronSession = async (
       const msg = loadError instanceof Error ? loadError.message : String(loadError);
       if (msg.includes('ERR_ABORTED')) {
         if (msg.includes('risk_handler') || msg.includes('cfe.m.jd.com')) {
-          throw new Error('拦截到京东滑块验证！请点击左侧平台【登录】按钮，在弹出的窗口中浏览该商品完成验证，再重试此任务。');
+          throw new JdCaptchaRequiredError('拦截到京东滑块验证！请点击左侧平台【登录】按钮，在弹出的窗口中浏览该商品完成验证，再重试此任务。');
         }
         // 对于其他的 ERR_ABORTED（通常是因为内部重定向或被追踪器拦截），可以选择忽略并尝试继续解析
       } else {
         throw loadError;
       }
     }
-    await logNormalWait(2500);
+    // 等待首屏自然加载
+    const isSafeMode = downloadPolicy?.safeMode !== false;
+    const initialWaitMs = isSafeMode
+      ? 6_000 + Math.floor(Math.random() * 6_000)   // 安全模式：6~12 秒
+      : 3_000 + Math.floor(Math.random() * 3_000);   // 自定义模式：3~6 秒
+    await logNormalWait(initialWaitMs);
     await assertNoJdSecurityRiskInElectron(parseWindow);
 
-    // 记录页面加载完成时间，用于后续确保最低停留时间
-    const pageLoadDone = Date.now();
-    const minDwellMs = logNormalRandomMs(18_000, 0.3); // 12~25 秒，均值 18s
+    // 第一次 DOM 采集：主图、SKU 图、已渲染详情图
+    let sectionImageUrls = await collectJdSectionImageUrlsInElectron(parseWindow);
+    const firstCollectDetailCount = sectionImageUrls.detail.length;
+    console.log('[PARSE] 首次采集: main=%d, detail=%d, sku=%d',
+      sectionImageUrls.main.length, sectionImageUrls.detail.length, sectionImageUrls.sku.length);
 
-    // 随机化交互序列：每个商品的行为模式不同
-    await simulateRandomInteractions(parseWindow);
+    // 判断采集结果是否足够，不足时按需补充动作
+    if (!hasEnoughImages(sectionImageUrls)) {
+      console.log('[PARSE] 详情图不足，执行补充动作');
 
-    // 补足最低页面停留时间（如果随机操作执行得快，额外等待以达到最低停留）
-    const elapsed = Date.now() - pageLoadDone;
-    if (elapsed < minDwellMs) {
-      const remainMs = minDwellMs - elapsed;
-      console.log(`[交互] 补足停留时间: ${Math.round(remainMs / 1000)}s (已停留 ${Math.round(elapsed / 1000)}s, 目标 ${Math.round(minDwellMs / 1000)}s)`);
-      await logNormalWait(remainMs);
+      if (isSafeMode) {
+        // 安全模式：轻量动作 — 点击详情 tab + 轻滚动，不做随机交互
+        await openJdDetailTabInElectron(parseWindow);
+        await lightScrollElectronPage(parseWindow);
+      } else {
+        // 自定义模式：使用完整随机交互
+        const pageLoadDone = Date.now();
+        const minDwellMs = logNormalRandomMs(18_000, 0.3);
+        await simulateRandomInteractions(parseWindow);
+        const elapsed = Date.now() - pageLoadDone;
+        if (elapsed < minDwellMs) {
+          const remainMs = minDwellMs - elapsed;
+          console.log(`[交互] 补足停留时间: ${Math.round(remainMs / 1000)}s`);
+          await logNormalWait(remainMs);
+        }
+      }
+
+      await assertNoJdSecurityRiskInElectron(parseWindow);
+
+      // 第二次 DOM 采集
+      sectionImageUrls = await collectJdSectionImageUrlsInElectron(parseWindow);
+      console.log('[PARSE] 二次采集: main=%d, detail=%d, sku=%d',
+        sectionImageUrls.main.length, sectionImageUrls.detail.length, sectionImageUrls.sku.length);
+    } else {
+      // 采集足够，补足最低停留时间（安全模式 6~12s 已在 initialWaitMs 中覆盖）
+      if (!isSafeMode) {
+        await logNormalWait(logNormalRandomMs(8_000, 0.3));
+      }
     }
 
-    await assertNoJdSecurityRiskInElectron(parseWindow);
-
-    const sectionImageUrls = await collectJdSectionImageUrlsInElectron(parseWindow);
-
-    // === 调试日志（主进程终端） ===
-    const currentUrl = parseWindow.webContents.getURL();
-    console.log('[DEBUG] current URL:', currentUrl);
-    console.log('[DEBUG] sectionImageUrls.main count:', sectionImageUrls.main.length);
-    console.log('[DEBUG] sectionImageUrls.detail count:', sectionImageUrls.detail.length);
-    if (sectionImageUrls.main.length > 0) {
-      sectionImageUrls.main.slice(0, 3).forEach((url, i) => console.log(`[DEBUG] main[${i}]:`, url));
-    }
-    if (sectionImageUrls.detail.length > 0) {
-      sectionImageUrls.detail.slice(0, 3).forEach((url, i) => console.log(`[DEBUG] detail[${i}]:`, url));
-    }
-    if (sectionImageUrls.sku.length > 0) {
-      console.log('[DEBUG] sku count:', sectionImageUrls.sku.length);
+    const skuId = extractJdSkuId(normalizedUrl);
+    // 详情 API 按需调用：仅在 DOM 详情图不足时调用
+    let descriptionHtml: string | undefined;
+    const shouldFetchDesc =
+      skuId &&
+      sectionImageUrls.detail.length < 3 &&
+      (!isSafeMode || Math.random() < 0.5);
+    if (shouldFetchDesc) {
+      console.log('[PARSE] 详情图仍不足，调用详情 API');
+      await logNormalWait(2000);
+      descriptionHtml = await fetchJdDescriptionInElectron(parseWindow, skuId!);
+    } else if (skuId && sectionImageUrls.detail.length >= 3) {
+      console.log('[PARSE] 详情图足够，跳过详情 API');
     }
 
     const [html, pageTitle] = await Promise.all([
@@ -980,17 +1104,6 @@ const parseJdProductAssetsWithElectronSession = async (
     ]);
     console.log('[DEBUG] pageTitle:', pageTitle);
     console.log('[DEBUG] html length:', html.length);
-    const skuId = extractJdSkuId(normalizedUrl);
-    // 详情 API 调用随机化：85% 概率调用，15% 概率跳过（只用 DOM 提取）
-    const shouldFetchDesc = skuId && Math.random() < 0.85;
-    if (skuId && !shouldFetchDesc) {
-      console.log('[DEBUG] 跳过详情 API 调用（随机跳过）');
-    }
-    // 调用前随机延迟 1~4 秒，避免提取后立刻调 API 的固定模式
-    if (shouldFetchDesc) {
-      await logNormalWait(2000);
-    }
-    const descriptionHtml = shouldFetchDesc ? await fetchJdDescriptionInElectron(parseWindow, skuId!) : undefined;
     console.log('[DEBUG] descriptionHtml length:', descriptionHtml?.length ?? 0);
     if (descriptionHtml && descriptionHtml.length > 0) {
       console.log('[DEBUG] descriptionHtml preview:', descriptionHtml.slice(0, 200));
@@ -1004,14 +1117,15 @@ const parseJdProductAssetsWithElectronSession = async (
       pageTitle,
       sectionImageUrls,
     }, descriptionHtml);
-    console.log('[DEBUG] parsed main count:', result.images.main.length,
-      '| detail count:', result.images.detail.length,
-      '| sku count:', result.images.sku.length,
-      '| unknown count:', result.images.unknown.length);
-    if (result.images.unknown.length > 0) {
-      console.log('[DEBUG] unknown samples:');
-      result.images.unknown.slice(0, 5).forEach((item, i) => console.log(`  [${i}]`, item.url));
-    }
+    console.log('[PARSE] 最终结果: main=%d, detail=%d, sku=%d, unknown=%d',
+      result.images.main.length, result.images.detail.length,
+      result.images.sku.length, result.images.unknown.length);
+    console.log('[PARSE] 详情补图摘要: 首次DOM=%d, 二次DOM=%d, API调用=%s, 最终详情=%d',
+      firstCollectDetailCount,
+      sectionImageUrls.detail.length,
+      shouldFetchDesc ? '是' : '否',
+      result.images.detail.length);
+
     return result;
   } catch (err) {
     // 安全风险或频繁失败时，让窗口作废，下次重建
@@ -1156,8 +1270,34 @@ const createTaskQueue = (initialTasks: DownloadTask[]) => {
     concurrency: 1,
     initialTasks,
     getActivePolicyFn: () => activePolicy,
-    onBrowseCooldown: (browsePauseMin, browsePauseMax) =>
-      simulateJdBrowse(authProfileManager.getPartition('jd'), browsePauseMin, browsePauseMax),
+    // 安全模式下改为纯休眠，不再打开京东页面模拟浏览
+    onBrowseCooldown: async (browsePauseMin, browsePauseMax) => {
+      const pauseMs = browsePauseMin * 1_000 + Math.random() * (browsePauseMax - browsePauseMin) * 1_000;
+      console.log(`[COOLDOWN] 纯休眠 ${Math.round(pauseMs / 1000)}s（范围 ${browsePauseMin}~${browsePauseMax}s）`);
+      await wait(pauseMs);
+    },
+    onSecurityRisk: (task) => {
+      void showSecurityRiskAlert(task);
+    },
+    onAutoPaused: () => {
+      void (async () => {
+        const counts = getTaskCounts(taskQueue.listTasks());
+        await dialog.showMessageBox(mainWindow!, {
+          type: 'warning',
+          title: '队列已自动暂停',
+          message: '连续失败次数过多，队列已自动暂停',
+          detail: `已连续失败 ${counts.failed} 个任务。请检查网络或登录状态后重试。`,
+          buttons: ['重试失败任务', '稍后处理'],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        }).then((result) => {
+          if (result.response === 0) {
+            taskQueue.retryFailed();
+          }
+        });
+      })();
+    },
     onChange: (tasks) => {
       void saveAppState(tasks);
       handleQueueChangeForNotifications(tasks);
@@ -1455,11 +1595,7 @@ ipcMain.handle('task:clear-failed', () => taskQueue.clearFailed());
 
 ipcMain.handle('task:clear-pending', () => taskQueue.clearPending());
 
-ipcMain.handle('task:queue-status', () => ({
-  autoPaused: taskQueue.autoPaused,
-  consecutiveFailures: taskQueue.consecutiveFailures,
-  threshold: TaskQueue.AUTO_PAUSE_THRESHOLD,
-}));
+ipcMain.handle('task:queue-status', () => taskQueue.getQueueStatus());
 
 ipcMain.handle('task:remove', (_event, taskId: string) => taskQueue.removeTask(taskId));
 
@@ -1476,6 +1612,10 @@ ipcMain.handle('task:open-output', async (_event, taskId: string) => {
     errorMessage: errorMessage || undefined,
   };
 });
+
+ipcMain.handle('task:open-manual-verify', async (_event, platformId: string, taskId?: string) =>
+  openManualVerifyWindow(platformId, taskId),
+);
 
 app.whenReady().then(async () => {
   appStateStore = new AppStateStore(path.join(app.getPath('userData'), 'app-state.json'));

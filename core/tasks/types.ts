@@ -1,5 +1,17 @@
 import type { AssetType } from '../parsers/types.js';
 
+export type RiskPaceLevel = 'fast' | 'standard' | 'conservative';
+
+export type QueueRunState =
+  | 'idle'
+  | 'running'
+  | 'cooling'
+  | 'paused'
+  | 'autoPaused'
+  | 'securityBlocked'
+  | 'completed'
+  | 'failed';
+
 export type TaskStatus =
   | 'pending'
   | 'parsing'
@@ -16,6 +28,7 @@ export interface TaskProgress {
 
 export interface DownloadPolicy {
   safeMode: boolean;
+  riskPaceLevel?: RiskPaceLevel;
   imageConcurrency: number;
   requestDelayMs: number;
   // ── 反风控节奏控制参数 ──
@@ -38,6 +51,15 @@ export interface AssetCounts {
 
 export type TaskMode = 'download' | 'parseOnly';
 
+export type TaskFailureKind =
+  | 'securityRisk'
+  | 'captcha'
+  | 'authExpired'
+  | 'parseEmpty'
+  | 'network'
+  | 'download'
+  | 'unknown';
+
 export interface ParsedImageUrls {
   main: string[];
   detail: string[];
@@ -57,6 +79,7 @@ export interface DownloadTask {
   parsedImageUrls?: ParsedImageUrls;
   status: TaskStatus;
   progress: TaskProgress;
+  failureKind?: TaskFailureKind;
   errorMessage?: string;
   outputDir?: string;
   createdAt: number;
@@ -76,6 +99,7 @@ export type TaskPatch = Partial<
     | 'parsedImageUrls'
     | 'status'
     | 'progress'
+    | 'failureKind'
     | 'errorMessage'
     | 'outputDir'
   >
@@ -95,4 +119,8 @@ export interface TaskQueueOptions {
   getActivePolicyFn?: () => DownloadPolicy | undefined;
   /** 模拟浏览/长休回调，接收最小/最大休息时长（秒），TaskQueue 会在达到阈值时调用 */
   onBrowseCooldown?: (browsePauseMin: number, browsePauseMax: number) => Promise<void>;
+  /** 安全风控回调，当检测到安全类错误时调用，用于触发系统通知和 UI 提示 */
+  onSecurityRisk?: (task: DownloadTask, failureKind: TaskFailureKind) => void;
+  /** 连续失败自动暂停回调 */
+  onAutoPaused?: (tasks: DownloadTask[]) => void;
 }

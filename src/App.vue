@@ -5,6 +5,9 @@ import type {
   DownloadPolicy,
   DownloadTask,
   PlatformAuthStatus,
+  QueueRunState,
+  RiskPaceLevel,
+  TaskFailureKind,
   TaskMode,
   TaskStatus,
 } from './types/electron';
@@ -19,6 +22,7 @@ const selectedPlatformId = ref('jd');
 const selectedTaskId = ref('');
 const selectedAssetTypes = ref<AssetType[]>(['main', 'detail']);
 const safeMode = ref(true);
+const riskPaceLevel = ref<RiskPaceLevel>('standard');
 const debugMode = ref(false);
 const showAdvancedPolicy = ref(false); // 高级反风控设置是否展开
 // ── 图片下载参数 ──
@@ -34,7 +38,15 @@ const customEnablePrewarm = ref(false);
 const pauseRequested = ref(false);
 const autoPaused = ref(false);
 const autoPauseThreshold = ref(3);
+const queueRunState = ref<QueueRunState>('idle');
+const queueCooldownUntil = ref<number | undefined>();
+const queueLastErrorMessage = ref('');
+const queueLastFailureKind = ref<TaskFailureKind | undefined>();
+const queueCurrentTask = ref<{ id: string; title?: string; skuId?: string; sourceUrl: string; status: TaskStatus } | undefined>();
+const queueCounts = ref({ total: 0, pending: 0, running: 0, success: 0, failed: 0 });
+const cooldownRemainingSec = ref(0);
 let refreshTimer: number | undefined;
+let cooldownTimer: number | undefined;
 let disposeUpdateProgress: (() => void) | undefined;
 let disposeUpdateError: (() => void) | undefined;
 
@@ -42,6 +54,13 @@ const canAddTasks = computed(() => rawLinks.value.trim().length > 0);
 const hasTasks = computed(() => tasks.value.length > 0);
 const hasFailedTasks = computed(() => tasks.value.some((task) => task.status === 'failed'));
 const hasCompletedTasks = computed(() => tasks.value.some((task) => task.status === 'success'));
+const securityRiskKinds: TaskFailureKind[] = ['securityRisk', 'captcha', 'authExpired'];
+const hasSecurityRiskTasks = computed(() =>
+  tasks.value.some((task) => task.status === 'failed' && task.failureKind && securityRiskKinds.includes(task.failureKind)),
+);
+const firstSecurityRiskTask = computed(() =>
+  tasks.value.find((task) => task.status === 'failed' && task.failureKind && securityRiskKinds.includes(task.failureKind)),
+);
 const hasPendingTasks = computed(() => tasks.value.some((task) => task.status === 'pending'));
 const pendingTaskCount = computed(() => tasks.value.filter((task) => task.status === 'pending').length);
 const failedTasks = computed(() => tasks.value.filter((task) => task.status === 'failed'));
@@ -104,8 +123,9 @@ const taskSummary = computed(() => ({
   success: tasks.value.filter((task) => task.status === 'success').length,
   failed: tasks.value.filter((task) => task.status === 'failed').length,
 }));
+const isQueueActive = computed(() => queueRunState.value === 'running' || queueRunState.value === 'cooling');
 const shouldShowPauseNotice = computed(
-  () => pauseRequested.value && (pendingTaskCount.value > 0 || taskSummary.value.running > 0),
+  () => pauseRequested.value && (pendingTaskCount.value > 0 || isQueueActive.value),
 );
 const pauseNoticeText = computed(() => {
   const pendingText =
@@ -119,19 +139,48 @@ const pauseNoticeText = computed(() => {
 
   return `${pendingText}，${runningText}。`;
 });
+const RISK_PACE_PRESETS: Record<RiskPaceLevel, DownloadPolicy> = {
+  fast: {
+    safeMode: true,
+    riskPaceLevel: 'fast',
+    imageConcurrency: 2,
+    requestDelayMs: 800,
+    taskCooldownMin: 30,
+    taskCooldownMax: 75,
+    browsePauseMin: 180,
+    browsePauseMax: 360,
+    browseInterval: 12,
+    enablePrewarm: false,
+  },
+  standard: {
+    safeMode: true,
+    riskPaceLevel: 'standard',
+    imageConcurrency: 2,
+    requestDelayMs: 800,
+    taskCooldownMin: 60,
+    taskCooldownMax: 150,
+    browsePauseMin: 300,
+    browsePauseMax: 600,
+    browseInterval: 10,
+    enablePrewarm: false,
+  },
+  conservative: {
+    safeMode: true,
+    riskPaceLevel: 'conservative',
+    imageConcurrency: 1,
+    requestDelayMs: 1200,
+    taskCooldownMin: 120,
+    taskCooldownMax: 300,
+    browsePauseMin: 600,
+    browsePauseMax: 1200,
+    browseInterval: 6,
+    enablePrewarm: false,
+  },
+};
+
 const currentDownloadPolicy = computed<DownloadPolicy>(() => {
   if (safeMode.value) {
-    return {
-      safeMode: true,
-      imageConcurrency: 2,
-      requestDelayMs: 800,
-      taskCooldownMin: 20,
-      taskCooldownMax: 50,
-      browsePauseMin: 60,
-      browsePauseMax: 180,
-      browseInterval: 5,
-      enablePrewarm: true,
-    };
+    return { ...RISK_PACE_PRESETS[riskPaceLevel.value] };
   }
 
   return {
@@ -195,21 +244,34 @@ const assetTypeText: Record<AssetType, string> = {
   unknown: '未分类图',
 };
 
+const riskPaceLabel: Record<RiskPaceLevel, string> = {
+  fast: '快速',
+  standard: '标准',
+  conservative: '保守',
+};
+
 function formatDownloadPolicy(policy?: DownloadPolicy) {
   const value = policy || {
     safeMode: true,
+    riskPaceLevel: 'standard' as RiskPaceLevel,
     imageConcurrency: 2,
     requestDelayMs: 800,
-    taskCooldownMin: 20,
-    taskCooldownMax: 50,
-    browsePauseMin: 60,
-    browsePauseMax: 180,
-    browseInterval: 5,
-    enablePrewarm: true,
+    taskCooldownMin: 60,
+    taskCooldownMax: 150,
+    browsePauseMin: 300,
+    browsePauseMax: 600,
+    browseInterval: 10,
+    enablePrewarm: false,
   };
 
   const cooldown = `冷却 ${value.taskCooldownMin ?? 5}~${value.taskCooldownMax ?? 15}s`;
-  return `${value.safeMode ? '安全模式' : '自定义模式'} · 并发 ${value.imageConcurrency} · 间隔 ${value.requestDelayMs}ms · ${cooldown}`;
+
+  if (value.safeMode) {
+    const pace = value.riskPaceLevel || 'standard';
+    return `安全模式 · ${riskPaceLabel[pace]} · ${cooldown} · 每 ${value.browseInterval} 个休息 ${Math.round((value.browsePauseMin ?? 300) / 60)}~${Math.round((value.browsePauseMax ?? 600) / 60)}min`;
+  }
+
+  return `自定义模式 · 并发 ${value.imageConcurrency} · 间隔 ${value.requestDelayMs}ms · ${cooldown}`;
 }
 
 const selectedAssetTypeLabels = (types?: AssetType[]) =>
@@ -277,6 +339,48 @@ const refreshTasks = async () => {
   const status = await window.jdDownloader.getQueueStatus();
   autoPaused.value = status.autoPaused;
   autoPauseThreshold.value = status.threshold;
+  queueRunState.value = status.state;
+  queueCooldownUntil.value = status.cooldownUntil;
+  queueLastErrorMessage.value = status.lastErrorMessage || '';
+  queueLastFailureKind.value = status.lastFailureKind;
+  queueCurrentTask.value = status.currentTask;
+  queueCounts.value = status.counts;
+
+  // 冷却倒计时：每秒更新剩余秒数
+  if (status.cooldownUntil) {
+    startCooldownTimer();
+  } else {
+    stopCooldownTimer();
+  }
+};
+
+const startCooldownTimer = () => {
+  if (cooldownTimer) return;
+  cooldownTimer = window.setInterval(() => {
+    if (!queueCooldownUntil.value) {
+      stopCooldownTimer();
+      return;
+    }
+    const remain = Math.max(0, Math.round((queueCooldownUntil.value - Date.now()) / 1000));
+    cooldownRemainingSec.value = remain;
+    if (remain <= 0) {
+      stopCooldownTimer();
+    }
+  }, 1000);
+};
+
+const stopCooldownTimer = () => {
+  if (cooldownTimer) {
+    clearInterval(cooldownTimer);
+    cooldownTimer = undefined;
+  }
+  cooldownRemainingSec.value = 0;
+};
+
+const formatCooldown = (seconds: number) => {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 };
 
 const refreshPlatforms = async () => {
@@ -439,6 +543,15 @@ const refreshPlatformAuth = async (platform: PlatformAuthStatus) => {
     : `${platform.name}登录状态已刷新：仍未登录。`;
 };
 
+const openManualVerify = async () => {
+  const platformId = firstSecurityRiskTask.value?.platform || selectedPlatformId.value;
+  const taskId = firstSecurityRiskTask.value?.id;
+  const result = await window.jdDownloader.openManualVerify(platformId, taskId);
+  message.value = result.ok
+    ? '已打开京东验证页面，请在页面中手动完成验证后回到应用重试。'
+    : result.errorMessage || '打开验证页面失败。';
+};
+
 const clearPlatformAuth = async (platform: PlatformAuthStatus) => {
   const result = await window.jdDownloader.clearPlatformAuth(platform.platform);
   await refreshPlatforms();
@@ -490,6 +603,7 @@ onUnmounted(() => {
   if (refreshTimer) {
     window.clearInterval(refreshTimer);
   }
+  stopCooldownTimer();
   disposeUpdateProgress?.();
   disposeUpdateError?.();
 });
@@ -656,7 +770,24 @@ onUnmounted(() => {
                 >
                   {{ showAdvancedPolicy ? '▾ 收起高级设置' : '▸ 高级反风控设置' }}
                 </button>
-                <span v-else class="safe-mode-hint">安全模式已自动配置最优反风控参数</span>
+                <span v-else class="safe-mode-hint">安全模式会使用更保守的解析节奏，降低连续访问强度</span>
+              </div>
+              <div v-if="safeMode" class="risk-pace-selector">
+                <span class="risk-pace-label">安全节奏</span>
+                <label v-for="level in (['fast', 'standard', 'conservative'] as RiskPaceLevel[])" :key="level" class="risk-pace-option">
+                  <input
+                    type="radio"
+                    name="riskPaceLevel"
+                    :value="level"
+                    v-model="riskPaceLevel"
+                  />
+                  {{ riskPaceLabel[level] }}
+                </label>
+                <span class="risk-pace-desc">
+                  <template v-if="riskPaceLevel === 'fast'">适合少量商品，速度更快，风险相对更高</template>
+                  <template v-else-if="riskPaceLevel === 'standard'">推荐，速度与稳定性折中</template>
+                  <template v-else>适合触发过风控后使用，速度较慢</template>
+                </span>
               </div>
               <div v-if="!safeMode && showAdvancedPolicy" class="advanced-policy-fields">
                 <div class="advanced-policy-row">
@@ -712,8 +843,8 @@ onUnmounted(() => {
         <div class="panel-heading">
           <h2>任务区</h2>
           <div class="toolbar">
-            <button v-if="taskSummary.running === 0" type="button" :disabled="!hasTasks" @click="startTasks">开始下载</button>
-            <button v-else type="button" class="secondary-button" @click="pauseTasks">暂停队列</button>
+            <button v-if="isQueueActive" type="button" class="secondary-button" @click="pauseTasks">暂停队列</button>
+            <button v-else type="button" :disabled="!hasTasks" @click="startTasks">开始下载</button>
             <button v-if="debugMode" type="button" class="secondary-button" :disabled="!hasTasks" @click="startParseTasks">
               开始解析
             </button>
@@ -765,6 +896,17 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <div v-if="hasSecurityRiskTasks" class="action-notice security-risk-notice" role="alert">
+          <div>
+            <strong>京东需要手动验证</strong>
+            <p>京东返回安全验证或账号风险页面，队列已暂停。请在打开的京东页面中手动完成验证或正常浏览当前商品，完成后返回应用重试失败任务。</p>
+          </div>
+          <div class="auto-pause-actions">
+            <button type="button" @click="openManualVerify">打开验证页面</button>
+            <button type="button" @click="retryFailed">我已完成验证，重试失败任务</button>
+          </div>
+        </div>
+
         <div v-if="shouldShowPauseNotice" class="queue-pause-notice" role="status" aria-live="polite">
           <div class="pause-notice-icon" aria-hidden="true">
             <span></span>
@@ -775,6 +917,40 @@ onUnmounted(() => {
             <p>{{ pauseNoticeText }}</p>
           </div>
           <button type="button" @click="startTasks">继续下载</button>
+        </div>
+
+        <!-- 总状态栏 -->
+        <div v-if="hasTasks" class="queue-status-bar" role="status" aria-live="polite">
+          <div class="queue-status-row">
+            <span class="queue-status-label">状态</span>
+            <span :class="['queue-status-value', `queue-state-${queueRunState}`]">
+              <template v-if="queueRunState === 'running'">运行中</template>
+              <template v-else-if="queueRunState === 'cooling'">冷却中</template>
+              <template v-else-if="queueRunState === 'paused'">已暂停</template>
+              <template v-else-if="queueRunState === 'autoPaused'">自动暂停</template>
+              <template v-else-if="queueRunState === 'securityBlocked'">风控中断</template>
+              <template v-else-if="queueRunState === 'completed'">已完成</template>
+              <template v-else-if="queueRunState === 'failed'">有失败</template>
+              <template v-else>空闲</template>
+            </span>
+            <span class="queue-status-counts">
+              成功 {{ queueCounts.success }} · 失败 {{ queueCounts.failed }} · 待处理 {{ queueCounts.pending }}
+            </span>
+          </div>
+          <div v-if="queueCurrentTask" class="queue-status-row queue-status-current">
+            <span class="queue-status-label">当前</span>
+            <span class="queue-status-value">
+              {{ queueCurrentTask.skuId || queueCurrentTask.title || queueCurrentTask.sourceUrl }}
+            </span>
+          </div>
+          <div v-if="queueRunState === 'cooling' && cooldownRemainingSec > 0" class="queue-status-row queue-status-cooldown">
+            <span class="queue-status-label">冷却</span>
+            <span class="queue-status-value">剩余 {{ formatCooldown(cooldownRemainingSec) }}</span>
+          </div>
+          <div v-if="(queueRunState === 'autoPaused' || queueRunState === 'securityBlocked') && queueLastErrorMessage" class="queue-status-row queue-status-error">
+            <span class="queue-status-label">异常</span>
+            <span class="queue-status-value">{{ queueLastErrorMessage }}</span>
+          </div>
         </div>
 
         <div class="table-wrap" v-if="tasks.length > 0">

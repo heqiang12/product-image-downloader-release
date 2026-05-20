@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld('jdDownloader', {
   clearPending: () => ipcRenderer.invoke('task:clear-pending'),
   getQueueStatus: () => ipcRenderer.invoke('task:queue-status'),
   removeTask: (taskId: string) => ipcRenderer.invoke('task:remove', taskId),
+  openManualVerify: (platformId: string, taskId?: string) =>
+    ipcRenderer.invoke('task:open-manual-verify', platformId, taskId) as Promise<{
+      ok: boolean;
+      errorMessage?: string;
+    }>,
   openOutput: (taskId: string) =>
     ipcRenderer.invoke('task:open-output', taskId) as Promise<{
       ok: boolean;

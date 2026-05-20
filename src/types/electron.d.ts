@@ -10,8 +10,21 @@ export type TaskStatus =
 
 export type AssetType = 'main' | 'detail' | 'sku' | 'unknown';
 
+export type RiskPaceLevel = 'fast' | 'standard' | 'conservative';
+
+export type QueueRunState =
+  | 'idle'
+  | 'running'
+  | 'cooling'
+  | 'paused'
+  | 'autoPaused'
+  | 'securityBlocked'
+  | 'completed'
+  | 'failed';
+
 export interface DownloadPolicy {
   safeMode: boolean;
+  riskPaceLevel?: RiskPaceLevel;
   imageConcurrency: number;
   requestDelayMs: number;
   // ── 反风控节奏控制参数 ──
@@ -40,6 +53,15 @@ export interface AssetCounts {
 
 export type TaskMode = 'download' | 'parseOnly';
 
+export type TaskFailureKind =
+  | 'securityRisk'
+  | 'captcha'
+  | 'authExpired'
+  | 'parseEmpty'
+  | 'network'
+  | 'download'
+  | 'unknown';
+
 export interface DownloadTask {
   id: string;
   platform?: string;
@@ -57,6 +79,7 @@ export interface DownloadTask {
     success: number;
     failed: number;
   };
+  failureKind?: TaskFailureKind;
   errorMessage?: string;
   outputDir?: string;
   createdAt: number;
@@ -139,11 +162,33 @@ declare global {
       clearFailed: () => Promise<DownloadTask[]>;
       clearPending: () => Promise<DownloadTask[]>;
       getQueueStatus: () => Promise<{
+        state: QueueRunState;
         autoPaused: boolean;
         consecutiveFailures: number;
         threshold: number;
+        cooldownUntil?: number;
+        lastErrorMessage?: string;
+        lastFailureKind?: TaskFailureKind;
+        counts: {
+          total: number;
+          pending: number;
+          running: number;
+          success: number;
+          failed: number;
+        };
+        currentTask?: {
+          id: string;
+          title?: string;
+          skuId?: string;
+          sourceUrl: string;
+          status: TaskStatus;
+        };
       }>;
       removeTask: (taskId: string) => Promise<DownloadTask[]>;
+      openManualVerify: (platformId: string, taskId?: string) => Promise<{
+        ok: boolean;
+        errorMessage?: string;
+      }>;
       openOutput: (taskId: string) => Promise<{
         ok: boolean;
         errorMessage?: string;
