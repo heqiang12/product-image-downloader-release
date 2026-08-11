@@ -36,6 +36,38 @@ const normalizeTitle = (title: string, skuId: string): string => {
   return cleanedTitle || `京东商品_${skuId}`;
 };
 
+const normalizePrice = (value: string): string | undefined => {
+  const match = value.replace(/<[^>]+>/g, ' ').match(/(?:¥|￥)?\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)/);
+  return match?.[1]?.replace(/,/g, '');
+};
+
+const extractPriceFromPatterns = (html: string, patterns: RegExp[]): string | undefined => {
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    const price = match?.[1] ? normalizePrice(match[1]) : undefined;
+    if (price) return price;
+  }
+  return undefined;
+};
+
+export const extractJdPricesFromHtml = (html: string): ProductAssets['prices'] => ({
+  current: extractPriceFromPatterns(html, [
+    /<[^>]+class=["'][^"']*product-price--value[^"']*["'][^>]*>([\s\S]*?)<\//i,
+    /<(?:span|div)[^>]+id=["'](?:J_price|jd-price)["'][^>]*>([\s\S]*?)<\/(?:span|div)>/i,
+    /<[^>]+class=["'][^"']*p-price[^"']*["'][^>]*>([\s\S]*?)<\//i,
+    /<[^>]+class=["'][^"']*(?:price|J-p-)[^"']*["'][^>]*>([\s\S]*?)<\//i,
+    /<(?:span|div)[^>]+(?:data-price|data-sku-price)=["']([^"']+)["']/i,
+  ]),
+  original: extractPriceFromPatterns(html, [
+    /<[^>]+class=["'][^"']*product-price--gray-line-through[^"']*["'][^>]*>([\s\S]*?)<\//i,
+    /<[^>]+class=["'][^"']*product-price--gray[^"']*["'][^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i,
+    /<del\b[^>]*>([\s\S]*?)<\/del>/i,
+    /<s\b[^>]*>([\s\S]*?)<\/s>/i,
+    /<[^>]+class=["'][^"']*(?:origin-price|original-price|reference-price|market-price)[^"']*["'][^>]*>([\s\S]*?)<\//i,
+    /<(?:span|div)[^>]+id=["'](?:J_marketPrice|jd-market-price)["'][^>]*>([\s\S]*?)<\/(?:span|div)>/i,
+  ]),
+});
+
 export const extractJdTitleFromHtml = (html: string, skuId: string, pageTitle?: string): string => {
   if (pageTitle && pageTitle.trim()) {
     return normalizeTitle(pageTitle, skuId);
@@ -127,6 +159,7 @@ export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot, descriptionH
   const sourceUrl = normalizeJdProductUrl(snapshot.sourceUrl);
   const html = snapshot.html;
   const title = extractJdTitleFromHtml(html, skuId, snapshot.pageTitle);
+  const prices = extractJdPricesFromHtml(html);
 
   const mainHtml = collectSectionHtml(
     html,
@@ -181,6 +214,7 @@ export const parseJdAssetsFromSnapshot = (snapshot: JdHtmlSnapshot, descriptionH
     skuId,
     title,
     sourceUrl,
+    prices,
     images,
     debug: {
       pageTitle: snapshot.pageTitle,

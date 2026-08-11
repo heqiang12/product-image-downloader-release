@@ -25,12 +25,22 @@ export const writeMetaExcel = async (params: {
   outputDir: string;
   progress: { total: number; success: number; failed: number };
   assets: DownloadedAsset[];
+  selectedTypes: string[];
 }): Promise<string> => {
+  const includeCurrentPrice = params.selectedTypes.includes('currentPrice');
+  const includeOriginalPrice = params.selectedTypes.includes('originalPrice');
+  const currentPrice = includeCurrentPrice ? params.product.prices.current ?? '' : '';
+  const originalPrice = includeOriginalPrice ? params.product.prices.original ?? '' : '';
+  const priceColumns = {
+    ...(includeCurrentPrice ? { 当前价格: currentPrice } : {}),
+    ...(includeOriginalPrice ? { 划线价: originalPrice } : {}),
+  };
   const rows: Record<string, unknown>[] = [
     {
       商品名称: params.product.title,
       商品编码: params.product.skuId,
       商品链接: params.product.sourceUrl,
+      ...priceColumns,
       平台: params.product.platform.toUpperCase(),
       下载时间: new Date().toISOString(),
       图片总数: params.progress.total,
@@ -45,6 +55,7 @@ export const writeMetaExcel = async (params: {
       商品名称: params.product.title,
       商品编码: params.product.skuId,
       商品链接: params.product.sourceUrl,
+      ...priceColumns,
       图片类型: ASSET_TYPE_LABEL[asset.asset.type] ?? asset.asset.type,
       图片序号: i + 1,
       图片链接: asset.asset.url,
@@ -64,6 +75,8 @@ export const writeMetaExcel = async (params: {
     { wch: 25 }, // 商品名称
     { wch: 16 }, // 商品编码
     { wch: 45 }, // 商品链接
+    ...(includeCurrentPrice ? [{ wch: 12 }] : []), // 当前价格
+    ...(includeOriginalPrice ? [{ wch: 12 }] : []), // 划线价
     { wch: 8 },  // 平台
     { wch: 22 }, // 下载时间
     { wch: 8 },  // 图片总数

@@ -1,4 +1,10 @@
-export type AssetType = 'main' | 'detail' | 'sku' | 'unknown';
+export type AssetType =
+  | 'main'
+  | 'detail'
+  | 'sku'
+  | 'unknown'
+  | 'currentPrice'
+  | 'originalPrice';
 
 export interface AssetItem {
   url: string;
@@ -13,6 +19,10 @@ export interface ProductAssets {
   skuId: string;
   title: string;
   sourceUrl: string;
+  prices: {
+    current?: string;
+    original?: string;
+  };
   images: {
     main: AssetItem[];
     detail: AssetItem[];

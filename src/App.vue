@@ -235,6 +235,8 @@ const modeText: Record<TaskMode, string> = {
 const assetTypeOptions: Array<{ value: AssetType; label: string }> = [
   { value: 'main', label: '轮播主图' },
   { value: 'detail', label: '详情图' },
+  { value: 'currentPrice', label: '当前价格' },
+  { value: 'originalPrice', label: '划线价' },
 ];
 
 const assetTypeText: Record<AssetType, string> = {
@@ -242,6 +244,8 @@ const assetTypeText: Record<AssetType, string> = {
   detail: '详情图',
   sku: 'SKU 图',
   unknown: '未分类图',
+  currentPrice: '当前价格',
+  originalPrice: '划线价',
 };
 
 const riskPaceLabel: Record<RiskPaceLevel, string> = {
@@ -1046,6 +1050,10 @@ onUnmounted(() => {
           <dl>
             <dt>商品</dt>
             <dd>{{ selectedTask.title || '待解析商品' }}</dd>
+            <dt>当前价格</dt>
+            <dd>{{ selectedTask.prices?.current || '-' }}</dd>
+            <dt>划线价</dt>
+            <dd>{{ selectedTask.prices?.original || '-' }}</dd>
             <dt>链接</dt>
             <dd>{{ selectedTask.sourceUrl }}</dd>
             <dt>输出目录</dt>

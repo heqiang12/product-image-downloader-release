@@ -8,7 +8,13 @@ export type TaskStatus =
   | 'failed'
   | 'paused';
 
-export type AssetType = 'main' | 'detail' | 'sku' | 'unknown';
+export type AssetType =
+  | 'main'
+  | 'detail'
+  | 'sku'
+  | 'unknown'
+  | 'currentPrice'
+  | 'originalPrice';
 
 export type RiskPaceLevel = 'fast' | 'standard' | 'conservative';
 
@@ -68,6 +74,10 @@ export interface DownloadTask {
   sourceUrl: string;
   skuId?: string;
   title?: string;
+  prices?: {
+    current?: string;
+    original?: string;
+  };
   selectedTypes?: AssetType[];
   downloadPolicy?: DownloadPolicy;
   mode?: TaskMode;

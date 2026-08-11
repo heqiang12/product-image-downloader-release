@@ -33,18 +33,24 @@ const buildParsedImageUrls = (product: ProductAssets): ParsedImageUrls => ({
 const buildAssetCounts = (
   product: ProductAssets,
   selectedTypes: AssetType[],
-): AssetCounts => ({
+): AssetCounts => {
+  const selectedImageTypes = selectedTypes.filter(
+    (type) => type !== 'currentPrice' && type !== 'originalPrice',
+  );
+
+  return {
   main: product.images.main.length,
   detail: product.images.detail.length,
   sku: product.images.sku.length,
   unknown: product.images.unknown.length,
-  selected: selectedTypes.reduce((sum, type) => sum + (product.images[type]?.length || 0), 0),
+  selected: selectedImageTypes.reduce((sum, type) => sum + (product.images[type]?.length || 0), 0),
   total:
     product.images.main.length +
     product.images.detail.length +
     product.images.sku.length +
     product.images.unknown.length,
-});
+  };
+};
 
 export const createProductTaskProcessor = ({
   getOutputRoot,
@@ -86,6 +92,7 @@ export const createProductTaskProcessor = ({
         status: 'success',
         title: product.title,
         skuId: product.skuId,
+        prices: product.prices,
         selectedTypes,
         downloadPolicy,
         mode: 'parseOnly',
@@ -105,6 +112,7 @@ export const createProductTaskProcessor = ({
         status: 'failed',
         title: product.title,
         skuId: product.skuId,
+        prices: product.prices,
         selectedTypes,
         downloadPolicy,
         assetCounts,
@@ -122,6 +130,7 @@ export const createProductTaskProcessor = ({
       status: 'downloading',
       title: product.title,
       skuId: product.skuId,
+      prices: product.prices,
       selectedTypes,
       downloadPolicy,
       assetCounts,

@@ -3,7 +3,11 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { extractJdSkuId, isJdProductUrl, normalizeJdProductUrl } from '../core/parsers/jdUrl.js';
 import { normalizeAssetUrl } from '../core/parsers/assetUrl.js';
-import { parseJdAssetsFromSnapshot, summarizeProductAssets } from '../core/parsers/jdParser.js';
+import {
+  extractJdPricesFromHtml,
+  parseJdAssetsFromSnapshot,
+  summarizeProductAssets,
+} from '../core/parsers/jdParser.js';
 
 const rootDir = process.cwd();
 
@@ -66,6 +70,15 @@ const summary = summarizeProductAssets(assets);
 assert(assets.platform === 'jd', '平台标识错误');
 assert(assets.skuId === '100012043978', '解析结果 SKU ID 错误');
 assert(assets.title === '测试京东商品', '商品标题解析错误');
+assert(assets.prices.current === '54.76', '当前价格解析错误');
+assert(assets.prices.original === '62.9', '划线价解析错误');
+assert(
+  extractJdPricesFromHtml(
+    '<div class="page-right-price"><span class="product-price--value">3385.21</span>' +
+      '<div class="product-price--gray"><span>¥4099</span><span class="product-price--gray-label">补贴价</span></div></div>',
+  ).original === '4099',
+  '无专用 class 的灰色参考价解析错误',
+);
 assert(summary.counts.main === 2, '主图数量解析错误');
 assert(summary.counts.detail === 3, '详情图数量解析错误');
 assert(summary.counts.sku === 2, 'SKU 图数量解析错误');

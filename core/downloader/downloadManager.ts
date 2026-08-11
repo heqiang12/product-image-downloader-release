@@ -26,7 +26,11 @@ export const flattenSelectedAssets = (
   const assets: AssetItem[] = [];
 
   for (const type of selectedTypes) {
-    for (const asset of product.images[type] || []) {
+    if (type === 'currentPrice' || type === 'originalPrice') {
+      continue;
+    }
+
+    for (const asset of product.images[type as 'main' | 'detail' | 'sku' | 'unknown'] || []) {
       if (seen.has(asset.url)) {
         continue;
       }
@@ -203,6 +207,7 @@ export const downloadProductAssets = async (
     outputDir,
     progress,
     assets: results,
+    selectedTypes,
   });
 
   const result: ProductDownloadResult = {

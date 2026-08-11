@@ -16,7 +16,7 @@
 | `npm run dist:win` | 生成 Windows NSIS 安装包 |
 
 ### 验收脚本（按阶段递增）
-`accept:stage1` ~ `accept:stage5.8`，用 `tsx scripts/accept-stageN.ts` 验证构建产物和 IPC 链。
+`accept:stage1` ~ `accept:stage5.8` 验证构建产物和 IPC 链。除 `accept:stage1` 用 `node scripts/accept-stage1.mjs` 外，其余均为 `tsx scripts/accept-stageN.ts`。
 
 ## 多 tsconfig 编译边界
 

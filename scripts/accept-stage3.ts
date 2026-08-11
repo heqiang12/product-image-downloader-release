@@ -97,6 +97,10 @@ const main = async () => {
     skuId: '100012043978',
     title: '测试/商品:*?',
     sourceUrl: 'https://item.jd.com/100012043978.html',
+    prices: {
+      current: '19.90',
+      original: '29.90',
+    },
     images: {
       main: [
         {
@@ -138,7 +142,7 @@ const main = async () => {
     },
   };
 
-  const selectedTypes = ['main', 'detail', 'sku', 'unknown'] as const;
+  const selectedTypes = ['main', 'detail', 'sku', 'unknown', 'currentPrice'] as const;
 
   assert(flattenSelectedAssets(product, [...selectedTypes]).length === 4, '下载前去重失败');
 
@@ -172,6 +176,8 @@ const main = async () => {
   assert(summary['图片总数'] === 4, '商品图片清单.xlsx 总数错误');
   assert(summary['成功数'] === 3, '商品图片清单.xlsx 成功数量错误');
   assert(summary['失败数'] === 1, '商品图片清单.xlsx 失败数量错误');
+  assert(summary['当前价格'] === '19.90', '商品图片清单.xlsx 当前价格错误');
+  assert(!('划线价' in summary), '未勾选划线价时不应导出该列');
 
   // Remaining rows are asset-level data
   const assetRows = rows.slice(1);

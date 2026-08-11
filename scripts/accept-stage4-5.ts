@@ -26,6 +26,10 @@ const createMockProduct = (): ProductAssets => ({
   skuId: '100012043978',
   title: '真实闭环测试商品',
   sourceUrl: 'https://item.jd.com/100012043978.html',
+  prices: {
+    current: '19.90',
+    original: '29.90',
+  },
   images: {
     main: [
       {

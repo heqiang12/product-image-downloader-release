@@ -13,6 +13,8 @@ const ASSET_TYPE_DIR_NAMES: Record<AssetItem['type'], string> = {
   detail: '详情图',
   sku: '规格图',
   unknown: '其他图片',
+  currentPrice: '当前价格',
+  originalPrice: '划线价',
 };
 
 export interface SaveAssetInput {

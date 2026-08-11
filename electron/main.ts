@@ -45,7 +45,14 @@ let lastSecurityRiskNotificationAt = 0;
 let updateCheckStarted = false;
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
-const VALID_ASSET_TYPES = new Set<AssetType>(['main', 'detail', 'sku', 'unknown']);
+const VALID_ASSET_TYPES = new Set<AssetType>([
+  'main',
+  'detail',
+  'sku',
+  'unknown',
+  'currentPrice',
+  'originalPrice',
+]);
 const APP_DISPLAY_NAME = '商品图片下载助手';
 const APP_USER_MODEL_ID = 'com.product-image-downloader.app';
 

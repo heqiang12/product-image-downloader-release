@@ -72,6 +72,10 @@ export interface DownloadTask {
   sourceUrl: string;
   skuId?: string;
   title?: string;
+  prices?: {
+    current?: string;
+    original?: string;
+  };
   selectedTypes?: AssetType[];
   downloadPolicy?: DownloadPolicy;
   mode?: TaskMode;
@@ -92,6 +96,7 @@ export type TaskPatch = Partial<
     | 'platform'
     | 'skuId'
     | 'title'
+    | 'prices'
     | 'selectedTypes'
     | 'downloadPolicy'
     | 'mode'
