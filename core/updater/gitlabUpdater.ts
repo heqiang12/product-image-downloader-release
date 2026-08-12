@@ -26,7 +26,7 @@ export const GITLAB_UPDATE_CONFIG: GitlabUpdaterConfig = {
   // 注意：Generic Packages API 只接受数字项目 ID（path 编码会 400），故用 157
   project: '157',
   // ponytail: 令牌内置客户端是私有更新源的必要代价；泄露后到 GitLab 吊销重建即可
-  token: 'mj1ZkkMUu225xqQK4N_Y',
+  token: 'h3sc5CRUB8Gs7bubrUEx',
 };
 
 export interface GitlabReleaseInfo {
