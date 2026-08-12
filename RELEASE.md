@@ -81,15 +81,19 @@ git push origin --tags
 
 > **注意**：tag 必须先推送到 GitLab。`release:win` 脚本会在 GitLab 上查找 tag，找不到会自动创建（指向 main），但推荐先手动推送，保证 tag 指向正确提交。
 
-### 第 4 步：设置令牌并一键发布
+### 第 4 步：配置令牌（只需一次，永久生效）
 
-在 PowerShell 中设置令牌环境变量（只需当前窗口）：
+发版令牌（`api` 权限）只需配置一次，保存在本地文件 `scripts/.release-token`（已被 `.gitignore` 排除，不会进 Git 仓库）：
 
 ```powershell
-$env:GITLAB_TOKEN = "你的访问令牌"
+powershell -ExecutionPolicy Bypass -File scripts/set-release-token.ps1
 ```
 
-执行一键发布（打包 + 自动上传）：
+按提示粘贴发版令牌，回车即保存。之后所有发版都会自动读取，无需再设置环境变量。
+
+> 换令牌时重新执行上面命令覆盖即可。也可以临时用 `-Token` 参数或 `$env:GITLAB_TOKEN` 覆盖。
+
+### 第 5 步：一键发布
 
 ```bash
 npm run release:win
@@ -103,7 +107,7 @@ npm run release:win
 5. 创建/更新 GitLab Release
 6. 把安装包下载地址挂为 Release 资产链接
 
-### 第 5 步：验证发布结果
+### 第 6 步：验证发布结果
 
 打开 GitLab 页面检查：
 
@@ -142,15 +146,15 @@ http://47.114.48.201:9000/tools/product-image-downloader/-/releases
 
 `release/` 目录下没有 `.exe`。确认 `npm run release:win` 的打包步骤成功执行，或者先单独跑 `npm run dist:win`。
 
-### 提示缺少 GITLAB_TOKEN？
+### 提示缺少访问令牌？
 
-当前 PowerShell 窗口没有设置令牌：
+没有配置本地令牌。执行一次配置命令即可（永久生效）：
 
 ```powershell
-$env:GITLAB_TOKEN = "你的访问令牌"
+powershell -ExecutionPolicy Bypass -File scripts/set-release-token.ps1
 ```
 
-令牌在 GitLab → 偏好设置 → 访问令牌 生成，需勾选 `api` 权限。
+令牌在 GitLab → 偏好设置 → 访问令牌 生成，需勾选 `api` 权限。也可以临时用 `-Token` 参数或 `$env:GITLAB_TOKEN` 覆盖。
 
 ### 发错 tag / 版本号怎么办？
 
@@ -180,7 +184,7 @@ git push origin :refs/tags/v0.1.5
 - [ ] 功能验证正常（登录、导入 Excel、添加任务、开始下载、暂停队列、打开目录）
 - [ ] `package.json` 版本号已升级（`npm version patch/minor/major`）
 - [ ] 代码和 tag 已推送到 GitLab（`git push origin main --tags`）
-- [ ] 设置了 `$env:GITLAB_TOKEN`
+- [ ] 已配置本地发版令牌（`scripts/set-release-token.ps1` 执行过一次）
 - [ ] `npm run release:win` 打包上传成功
 - [ ] GitLab Releases 页面能看到新 tag 和安装包资产链接
 - [ ] 老用户手动安装包已分发（首次迁移需要）

@@ -1,7 +1,9 @@
 ﻿# 手动发布：打包产物上传到 GitLab Generic Packages + 挂 Release 资产
-# 用法：
-#   $env:GITLAB_TOKEN = "你的访问令牌"    # 或 -Token 参数传入
-#   powershell -ExecutionPolicy Bypass -File scripts/gitlab-release.ps1
+# 用法（令牌三种来源，按优先级：-Token 参数 > 环境变量 > 本地文件）：
+#   方式一：powershell -ExecutionPolicy Bypass -File scripts/gitlab-release.ps1 -Token "令牌"
+#   方式二：$env:GITLAB_TOKEN = "令牌"; powershell ... -File scripts/gitlab-release.ps1
+#   方式三（推荐，填一次永久生效）：先执行 scripts/set-release-token.ps1 配置本地令牌
+#          （保存到 scripts/.release-token，已被 .gitignore 排除，不进仓库）
 #
 # 为什么用 Generic Packages 而不是 uploads：
 #   私有项目下 uploads 文件下载会 302 到登录页（token 不生效），
@@ -22,8 +24,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# 令牌解析：-Token 参数 > 环境变量 GITLAB_TOKEN > 本地文件 scripts/.release-token
 if (-not $Token) {
-  throw '缺少访问令牌：请设置 $env:GITLAB_TOKEN 或使用 -Token 参数'
+  $tokenFile = Join-Path $PSScriptRoot '.release-token'
+  if (Test-Path $tokenFile) {
+    $Token = (Get-Content $tokenFile -Raw).Trim()
+    Write-Output "已从本地文件读取令牌 ($tokenFile)"
+  }
+}
+if (-not $Token) {
+  throw '缺少访问令牌：请先执行 scripts/set-release-token.ps1 配置本地令牌，或设置 $env:GITLAB_TOKEN / -Token 参数'
 }
 
 # 1. 从 package.json 读取版本

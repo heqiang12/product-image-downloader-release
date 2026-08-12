@@ -3,3 +3,5 @@ dist/
 dist-electron/
 release/
 .claude/
+# 本地发版令牌（不进仓库；脚本自动读取，见 scripts/gitlab-release.ps1）
+scripts/.release-token
