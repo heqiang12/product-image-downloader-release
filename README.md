@@ -11,7 +11,7 @@
 - 支持任务队列、进度展示、失败重试和完成清理。
 - 支持暂停未开始任务，并通过系统通知提示队列状态。
 - 支持保存目录选择、打开输出目录和任务状态持久化。
-- 支持 GitHub Releases 在线更新。
+- 支持 GitLab Releases 在线更新。
 
 ## 技术栈
 
@@ -20,7 +20,6 @@
 - TypeScript
 - Vite
 - electron-builder
-- electron-updater
 
 ## 环境要求
 

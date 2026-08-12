@@ -14,7 +14,7 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "pack": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
-    "release:win": "npm run build && electron-builder --win nsis --publish always",
+    "release:win": "npm run build && electron-builder --win nsis",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.core.json --noEmit",
     "accept:stage1": "node scripts/accept-stage1.mjs",
     "accept:stage2": "tsx scripts/accept-stage2.ts",
@@ -28,7 +28,6 @@
     "accept:stage5.8": "tsx scripts/accept-stage5-8.ts"
   },
   "dependencies": {
-    "electron-updater": "^6.8.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
@@ -69,10 +68,9 @@
     ],
     "publish": [
       {
-        "provider": "github",
-        "owner": "heqiang12",
-        "repo": "product-image-downloader-release",
-        "releaseType": "release"
+        "provider": "gitlab",
+        "host": "47.114.48.201:9000",
+        "projectId": "tools/product-image-downloader"
       }
     ],
     "win": {

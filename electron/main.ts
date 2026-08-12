@@ -1,6 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } from 'electron';
-import { autoUpdater } from 'electron-updater';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
+import {
+  compareVersions,
+  downloadFile,
+  getLatestReleaseInfo,
+} from '../core/updater/gitlabUpdater';
 import { TaskQueue } from '../core/tasks/taskQueue';
 import {
   isSupportedProductUrl,
@@ -42,7 +47,6 @@ let mainWindow: BrowserWindow | null = null;
 let queueNotificationActive = false;
 let lastPauseNotificationAt = 0;
 let lastSecurityRiskNotificationAt = 0;
-let updateCheckStarted = false;
 
 const DEFAULT_SELECTED_TYPES: AssetType[] = ['main', 'detail', 'sku'];
 const VALID_ASSET_TYPES = new Set<AssetType>([
@@ -305,61 +309,15 @@ const showSecurityRiskAlert = async (task?: DownloadTask) => {
   }
 };
 
-const setupAutoUpdater = () => {
-  if (updateCheckStarted || !app.isPackaged) {
-    return;
-  }
+// ── 更新检测：基于 GitLab Releases（核心逻辑在 core/updater/gitlabUpdater.ts）──
+// electron-updater 官方 GitLabProvider 写死 https 且依赖 GitLab 14.3+ 接口，
+// 自建 GitLab 13.8 + http 不可用，故自研。本文件只负责 Electron 侧的弹窗与静默安装。
 
-  updateCheckStarted = true;
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
-
-  autoUpdater.on('update-available', (info) => {
-    void showAppMessageBox({
-      type: 'info',
-      title: '发现新版本',
-      message: `发现新版本 ${info.version}`,
-      detail: '是否现在下载更新？下载完成后可以立即安装并重启应用。',
-      buttons: ['下载更新', '稍后再说'],
-      defaultId: 0,
-      cancelId: 1,
-    })
-      .then(({ response }) => {
-        if (response === 0) {
-          void autoUpdater.downloadUpdate();
-        }
-      });
-  });
-
-  autoUpdater.on('download-progress', (progress) => {
-    mainWindow?.webContents.send('update:download-progress', {
-      percent: Math.round(progress.percent),
-      transferred: progress.transferred,
-      total: progress.total,
-    });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    void showAppMessageBox({
-      type: 'info',
-      title: '更新已下载',
-      message: `新版本 ${info.version} 已下载完成`,
-      detail: '是否立即安装？应用会自动关闭并启动安装程序。',
-      buttons: ['立即安装', '稍后安装'],
-      defaultId: 0,
-      cancelId: 1,
-    })
-      .then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.quitAndInstall(false, true);
-        }
-      });
-  });
-
-  autoUpdater.on('error', (error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    mainWindow?.webContents.send('update:error', message);
-  });
+const installUpdateSilently = (installerPath: string) => {
+  // NSIS 安装包支持 /S 静默安装，装完自动启动新版本；当前进程退出让位。
+  const child = spawn(installerPath, ['/S'], { detached: true, stdio: 'ignore' });
+  child.unref();
+  app.quit();
 };
 
 const checkForUpdates = async () => {
@@ -371,16 +329,42 @@ const checkForUpdates = async () => {
     };
   }
 
-  setupAutoUpdater();
-
   try {
-    await autoUpdater.checkForUpdates();
+    const { version: latestVersion, installerUrl } = await getLatestReleaseInfo();
+    const currentVersion = app.getVersion();
+    if (compareVersions(latestVersion, currentVersion) <= 0) {
+      return { ok: true, upToDate: true };
+    }
+
+    const { response } = await showAppMessageBox({
+      type: 'info',
+      title: '发现新版本',
+      message: `发现新版本 ${latestVersion}，当前版本 ${currentVersion}`,
+      detail: '是否现在下载更新？下载完成后会自动安装并重启应用。',
+      buttons: ['下载更新', '稍后再说'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response !== 0) {
+      return { ok: true, skipped: true };
+    }
+
+    const target = path.join(app.getPath('temp'), `product-image-downloader-setup-${latestVersion}.exe`);
+    await downloadFile(installerUrl, target, (received, total) => {
+      if (total > 0) {
+        mainWindow?.webContents.send('update:download-progress', {
+          percent: Math.round((received / total) * 100),
+          transferred: received,
+          total,
+        });
+      }
+    });
+    installUpdateSilently(target);
     return { ok: true };
   } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : String(error),
-    };
+    const message = error instanceof Error ? error.message : String(error);
+    mainWindow?.webContents.send('update:error', message);
+    return { ok: false, message };
   }
 };
 
@@ -1632,7 +1616,6 @@ app.whenReady().then(async () => {
   taskQueue = createTaskQueue(savedState.tasks);
 
   mainWindow = createMainWindow();
-  setupAutoUpdater();
   setTimeout(() => {
     void checkForUpdates();
   }, 3_000);
