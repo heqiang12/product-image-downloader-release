@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   compareVersions,
   downloadFile,
+  GITLAB_UPDATE_CONFIG,
   getLatestReleaseInfo,
 } from '../core/updater/gitlabUpdater';
 import { TaskQueue } from '../core/tasks/taskQueue';
@@ -358,7 +359,7 @@ const checkForUpdates = async () => {
           total,
         });
       }
-    });
+    }, GITLAB_UPDATE_CONFIG.token);
     installUpdateSilently(target);
     return { ok: true };
   } catch (error) {

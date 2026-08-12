@@ -1,17 +1,22 @@
 # 发版与更新操作文档
 
-这份文档用于后续发布“商品图片下载助手”的新版本。当前项目使用 GitHub Actions 自动打包：普通代码提交不会发版，只有推送 `v*` 版本 tag 时，GitHub 才会自动打包 Windows 安装包并更新 GitHub Release。
+本项目的更新源已迁移到**自建 GitLab Releases**（`http://47.114.48.201:9000/tools/product-image-downloader`），采用**手动打包 + 脚本自动上传**的发布方式。用户端更新逻辑为自研方案（见 `core/updater/gitlabUpdater.ts`）。
 
-## 当前发布方式
+## 发布方式总览
 
-- 源码仓库：`https://github.com/heqiang12/product-image-downloader-release`
-- 更新源：GitHub Releases
-- 触发方式：推送版本 tag，例如 `v0.1.1`
-- 自动打包配置：`.github/workflows/release.yml`
-- 本地打包脚本：`npm run dist:win`
-- GitHub 发布脚本：`npm run release:win`
+- 源码仓库：`http://47.114.48.201:9000/tools/product-image-downloader`
+- 更新源：GitLab Releases（老用户安装的旧版本无法自动检测到 GitLab，需手动安装一次新版后，后续更新自动走 GitLab）
+- 打包方式：**本地手动打包**（`npm run release:win` 一条命令完成打包 + 上传）
+- 上传方式：`scripts/gitlab-release.ps1` 自动上传到 GitLab Release（自动建 tag、自动挂资产链接）
 
-## 日常开发提交
+## 一、准备：环境要求
+
+- Windows 电脑（打包 Windows 安装包必须在 Windows 环境）
+- Node.js 22+
+- 已安装项目依赖：`npm install`
+- 有 GitLab 访问令牌（需 `api` 权限）：在 GitLab → 偏好设置 → 访问令牌 中生成
+
+## 二、日常开发提交
 
 普通功能修改完成后，只提交代码，不发布安装包：
 
@@ -20,26 +25,20 @@ git status
 npm run typecheck
 git add .
 git commit -m "feat: 修改说明"
-git push
+git push origin main
 ```
 
-这种提交只会更新 GitHub 源码，不会触发安装包打包，也不会影响用户电脑上的软件。
+这种提交不会影响用户电脑上的软件，不会触发任何打包。
 
-## 本地测试打包
+## 三、本地测试打包
 
-在正式发版前，可以先本地打包验证安装包是否正常：
+正式发版前，可以先本地打包验证：
 
 ```bash
 npm run dist:win
 ```
 
-打包完成后，文件会生成在：
-
-```text
-release/
-```
-
-常见文件包括：
+产物生成在 `release/` 目录：
 
 ```text
 release/product-image-downloader-setup-版本号.exe
@@ -47,218 +46,141 @@ release/product-image-downloader-setup-版本号.exe.blockmap
 release/latest.yml
 ```
 
-说明：
+- `.exe`：给用户安装的安装包
+- `.blockmap`：增量更新相关文件（当前自研方案未使用，可忽略）
+- `latest.yml`：electron-updater 的版本清单（当前自研方案未使用，可忽略）
 
-- `.exe` 是给用户安装的软件安装包。
-- `.blockmap` 是增量更新相关文件。
-- `latest.yml` 是自动更新识别新版本的关键文件。
+本地测试时直接运行生成的 `.exe` 即可。
 
-本地测试时，可以直接运行生成的 `.exe` 安装包。
+## 四、正式发布新版本（核心流程）
 
-## 正式发布新版本
-
-正式发布建议使用 `npm version` 自动修改版本号并创建 tag。
-
-### 1. 确认工作区干净
+### 第 1 步：确认工作区干净
 
 ```bash
 git status
 ```
 
-如果看到：
+如果有未提交改动，先提交再继续。
+
+### 第 2 步：升级版本号
+
+```bash
+npm version patch    # 补丁版本 0.1.0 → 0.1.1（日常修复/小功能用这个）
+npm version minor    # 小版本 0.1.9 → 0.2.0
+npm version major    # 大版本 0.9.0 → 1.0.0
+```
+
+`npm version` 会自动：修改 `package.json` 版本号、修改 `package-lock.json`、创建 Git tag（如 `v0.1.5`）。
+
+### 第 3 步：推送代码和 tag
+
+```bash
+git push origin main
+git push origin --tags
+```
+
+> **注意**：tag 必须先推送到 GitLab。`release:win` 脚本会在 GitLab 上查找 tag，找不到会自动创建（指向 main），但推荐先手动推送，保证 tag 指向正确提交。
+
+### 第 4 步：设置令牌并一键发布
+
+在 PowerShell 中设置令牌环境变量（只需当前窗口）：
+
+```powershell
+$env:GITLAB_TOKEN = "你的访问令牌"
+```
+
+执行一键发布（打包 + 自动上传）：
+
+```bash
+npm run release:win
+```
+
+这条命令自动完成：
+1. typecheck + 构建
+2. 打包 Windows NSIS 安装包到 `release/`
+3. 从 `package.json` 读取版本号，tag 定为 `v{版本号}`
+4. 上传安装包到 GitLab Generic Packages（API 路径，客户端带 token 可下载）
+5. 创建/更新 GitLab Release
+6. 把安装包下载地址挂为 Release 资产链接
+
+### 第 5 步：验证发布结果
+
+打开 GitLab 页面检查：
 
 ```text
-nothing to commit, working tree clean
+http://47.114.48.201:9000/tools/product-image-downloader/-/releases
 ```
 
-说明可以继续。
+确认最新 tag（如 `v0.1.5`）下存在安装包资产链接。
 
-如果有未提交文件，先提交：
+### 第 6 步：分发安装包
+
+- **老用户（0.1.4 及更早，装的是 GitHub 通道版本）**：无法自动检测到 GitLab，需要手动分发一次新安装包。把 `release/*.exe` 通过公司内部渠道（钉钉/企业微信/内部盘）发给用户手动安装一次。
+- **已装过新版（含 GitLab 更新逻辑）的用户**：无需任何操作，下次启动自动检测更新。
+
+## 五、用户端更新逻辑（自研）
+
+用户电脑上的应用启动后 3 秒，会：
+
+1. 调 `GET /api/v4/projects/157/releases?per_page=1` 查最新 Release（带 `PRIVATE-TOKEN` header）
+2. 取 `tag_name`（如 `v0.1.5`）与本地版本比对
+3. 有新版 → 弹窗提示 → 用户点下载 → 从 Generic Packages API 流式下载（带进度，带 token）→ NSIS 静默安装 → 自动重启
+
+如果本地已是最新版本，不弹提示。
+
+**为什么带 token**：项目是私有的（`visibility=private`），匿名访问会被重定向到登录页；Generic Packages API 路径下带 `PRIVATE-TOKEN` header 才能下载安装包（已实测 SHA256 校验一致）。
+
+**复用说明**：其他项目想用这套更新逻辑，拷贝 `core/updater/gitlabUpdater.ts` 一个文件，修改文件顶部的 `GITLAB_UPDATE_CONFIG`（GitLab 地址 + 项目数字 ID + 令牌）即可。注意：Generic Packages API 只接受**数字项目 ID**（path 编码会 400）。
+
+## 六、常见问题
+
+### 推送 tag 后还需要做什么？
+
+本项目**不是** CI 自动打包。推送 tag 只是发布前的版本标记，真正的打包和上传由本地 `npm run release:win` 完成。**两步都要做**：推送 tag → 本地执行 `npm run release:win`。
+
+### 发版时提示找不到安装包？
+
+`release/` 目录下没有 `.exe`。确认 `npm run release:win` 的打包步骤成功执行，或者先单独跑 `npm run dist:win`。
+
+### 提示缺少 GITLAB_TOKEN？
+
+当前 PowerShell 窗口没有设置令牌：
+
+```powershell
+$env:GITLAB_TOKEN = "你的访问令牌"
+```
+
+令牌在 GitLab → 偏好设置 → 访问令牌 生成，需勾选 `api` 权限。
+
+### 发错 tag / 版本号怎么办？
+
+删除本地和远程 tag，重新发布：
 
 ```bash
-npm run typecheck
-git add .
-git commit -m "feat: 修改说明"
-git push
+git tag -d v0.1.5
+git push origin :refs/tags/v0.1.5
 ```
 
-### 2. 升级版本号
+然后重新执行正式发布流程。
 
-补丁版本，例如 `0.1.0` 升到 `0.1.1`：
+### 重复执行 release:win 会重复上传吗？
 
-```bash
-npm version patch
-```
+不会。脚本是幂等的：tag 存在则复用、Release 存在则更新、资产链接已存在则跳过。
 
-小版本，例如 `0.1.9` 升到 `0.2.0`：
+### 用户没有收到更新提示？
 
-```bash
-npm version minor
-```
+1. 确认用户装的是**含 GitLab 更新逻辑的新版**（老版本看不到 GitLab，需手动安装一次）
+2. 确认 GitLab Release 页面有对应 tag 和资产链接
+3. 确认 tag 版本号（`v0.1.5`）高于用户本地版本（`0.1.4`）
+4. 版本号相同时不会触发更新
 
-大版本，例如 `0.9.0` 升到 `1.0.0`：
+## 七、发布前检查清单
 
-```bash
-npm version major
-```
-
-一般日常修复和小功能，用 `patch` 就够了。
-
-执行后，`npm version` 会自动做三件事：
-
-1. 修改 `package.json` 里的版本号。
-2. 修改 `package-lock.json` 里的版本号。
-3. 创建对应的 Git tag，例如 `v0.1.1`。
-
-### 3. 推送代码和 tag
-
-```bash
-git push
-git push --tags
-```
-
-推送 tag 后，GitHub Actions 会自动开始打包和发布 Release。
-
-## 查看自动打包进度
-
-打开 GitHub 仓库：
-
-```text
-https://github.com/heqiang12/product-image-downloader-release
-```
-
-进入：
-
-```text
-Actions
-```
-
-找到最新的 `Release` 工作流。
-
-如果显示绿色对勾，说明打包发布成功。
-
-如果显示红色叉号，点进去查看失败日志。
-
-## 发布成功后检查
-
-打开 Releases 页面：
-
-```text
-https://github.com/heqiang12/product-image-downloader-release/releases
-```
-
-检查最新版本下是否有这些文件：
-
-```text
-latest.yml
-product-image-downloader-setup-版本号.exe
-product-image-downloader-setup-版本号.exe.blockmap
-```
-
-这三个文件都存在，自动更新才完整。
-
-## 用户端更新逻辑
-
-用户电脑上的旧版本软件启动后，会自动检查 GitHub Releases。
-
-例如：
-
-- 用户电脑安装的是 `0.1.0`
-- GitHub 最新 Release 是 `0.1.1`
-
-软件会弹窗提示发现新版本，用户点击下载后，软件内自动下载更新包。下载完成后，用户点击立即安装，软件会自动退出并启动安装覆盖旧版本。
-
-如果用户电脑已经是最新版本，不会弹出更新提示。
-
-## 手动上传 Release 的备用方式
-
-正常情况下不需要手动上传。只有 GitHub Actions 暂时不可用时，才使用备用方式。
-
-本地执行：
-
-```bash
-npm run dist:win
-```
-
-然后在 GitHub Releases 手动新建版本，例如 `v0.1.1`，并上传：
-
-```text
-release/latest.yml
-release/product-image-downloader-setup-0.1.1.exe
-release/product-image-downloader-setup-0.1.1.exe.blockmap
-```
-
-注意：Release tag 必须和 `package.json` 版本对应。例如 `package.json` 是 `0.1.1`，Release tag 就用 `v0.1.1`。
-
-## 常见问题
-
-### 推送代码后为什么没有自动打包？
-
-只有推送版本 tag 才会自动打包。普通 `git push` 不会发版。
-
-需要执行：
-
-```bash
-npm version patch
-git push
-git push --tags
-```
-
-### GitHub Actions 报版本不一致怎么办？
-
-工作流会检查 tag 和 `package.json` 版本是否一致。
-
-例如：
-
-- tag 是 `v0.1.2`
-- `package.json` 版本是 `0.1.1`
-
-这种会失败。
-
-解决方式：确保用 `npm version patch/minor/major` 创建 tag，不要手动乱建 tag。
-
-### 发错 tag 怎么办？
-
-如果 tag 还没被用户使用，可以删除本地和远程 tag：
-
-```bash
-git tag -d v0.1.1
-git push origin :refs/tags/v0.1.1
-```
-
-然后重新执行正确的版本发布流程。
-
-### 想只本地打包，不发布怎么办？
-
-执行：
-
-```bash
-npm run dist:win
-```
-
-不要推送 tag。
-
-### 想发布但不改功能，只重新发一个版本怎么办？
-
-依然需要升版本号：
-
-```bash
-npm version patch
-git push
-git push --tags
-```
-
-自动更新依赖版本号判断，同一个版本重复发布通常不会触发用户更新。
-
-## 推荐发版前检查清单
-
-每次正式发布前，建议确认：
-
-- 软件名称显示正常。
-- 登录、导入 Excel、添加任务、开始下载功能可用。
-- 暂停队列、系统通知、打开目录功能可用。
-- `npm run typecheck` 通过。
-- 本地 `npm run dist:win` 能成功生成安装包。
-- `package.json` 版本号准备升级。
-- GitHub Actions 发布成功后，Release 下有 `.exe`、`.blockmap`、`latest.yml` 三个文件。
-
+- [ ] `npm run typecheck` 通过
+- [ ] 功能验证正常（登录、导入 Excel、添加任务、开始下载、暂停队列、打开目录）
+- [ ] `package.json` 版本号已升级（`npm version patch/minor/major`）
+- [ ] 代码和 tag 已推送到 GitLab（`git push origin main --tags`）
+- [ ] 设置了 `$env:GITLAB_TOKEN`
+- [ ] `npm run release:win` 打包上传成功
+- [ ] GitLab Releases 页面能看到新 tag 和安装包资产链接
+- [ ] 老用户手动安装包已分发（首次迁移需要）
